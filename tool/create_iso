@@ -26,19 +26,37 @@ default help:
 	@echo "tool/boot/genode."
 
 #
+# Utilities to check if tools or binaries are installed
+#
+which_tool = $(shell which $(strip $(1)))
+# $(1) - tool / $(2) additional error message
+check_tool = $(if $(which_tool),$(which_tool),\
+             $(error Need to have tool '$(strip $(1))' installed. $(strip $(2))))
+find_bin   = $(firstword $(wildcard $(addsuffix /$(strip $(1)), $(strip $(2)))))
+# $(1) - binary / $(2) list of search paths
+check_bin  = $(if $(find_bin),$(find_bin),\
+             $(error Need to have binary '$(strip $(1))' installed.))
+
+SYSLINUX_DIRS = /usr/lib/syslinux/ /usr/share/syslinux/ /usr/local/share/syslinux/
+MKISOFS       = $(call check_tool, mkisofs, \
+                  If genisoimage is installed just create a symbolic link mkisofs->genisoimage.)
+ISOHYBRID     = $(call check_tool, isohybrid)
+ISOLINUX_BIN  = $(call check_bin,  isolinux.bin, $(SYSLINUX_DIRS))
+
+#
 # Function to generate bootable ISO images
 #
 # parameter 1  filename of ISO image
 # parameter 2  path of directory containing file tree for the ISO image
 #
-gen_iso_image = mkisofs     -f -l -R -hide-rr-moved -jcharset utf-8 \
+gen_iso_image = $(MKISOFS)  -f -l -R -hide-rr-moved -jcharset utf-8 \
                             -no-emul-boot -boot-load-size 4 -boot-info-table \
                             -b boot/isolinux/isolinux.bin \
                             -o $(1) $(2)
 
 $(ISOIMG) iso:
 	@$(call gen_iso_image, $(ISOIMG) $(ISODIR))
-	@which isohybrid > /dev/null && isohybrid $(ISOIMG)
+	@$(ISOHYBRID) $(ISOIMG)
 
 STRIP_FILES = $(wildcard genode/*) $(wildcard pistachio/*)
 
