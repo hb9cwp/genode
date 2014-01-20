@@ -149,9 +149,7 @@ class Dynamic_rom::Session_component : public Rpc_object<Genode::Rom_session>
 		Entrypoint &_ep;
 
 		typedef Session_component This;
-		Signal_rpc_member<This> _timer_dispatcher = { *this, &This::_timer_handler };
-
-		Signal_context_capability _timer_sigh = { _ep.manage(_timer_dispatcher) };
+		Signal_rpc_member<This> _timer_dispatcher = { _ep, *this, &This::_timer_handler };
 
 	public:
 
@@ -160,7 +158,7 @@ class Dynamic_rom::Session_component : public Rpc_object<Genode::Rom_session>
 			_verbose(verbose), _rom_node(rom_node), _ep(ep)
 		{
 			/* init timer signal handler */
-			_timer.sigh(_timer_sigh);
+			_timer.sigh(_timer_dispatcher);
 
 			/* execute first step immediately at session-creation time */
 			_execute_steps_until_sleep();
