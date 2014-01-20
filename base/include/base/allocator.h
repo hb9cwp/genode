@@ -25,6 +25,21 @@ namespace Genode {
 		 * Free block a previously allocated block
 		 */
 		virtual void free(void *addr, size_t size) = 0;
+
+		/**
+		 * Return true if the size argument of 'free' is required
+		 *
+		 * The generic 'Allocator' interface requires the caller of 'free'
+		 * to supply a valid size argument but not all implementations make
+		 * use of this argument. If this function returns false, it is safe
+		 * to call 'free' with an invalid size.
+		 *
+		 * Allocators that rely on the size argument must not be used for
+		 * constructing objects whose constructors may throw exceptions.
+		 * See the documentation of 'operator delete(void *, Allocator *)'
+		 * below for more details.
+		 */
+		virtual bool need_size_for_free() const { return true; }
 	};
 
 
@@ -75,21 +90,6 @@ namespace Genode {
 		 * Return meta-data overhead per block
 		 */
 		virtual size_t overhead(size_t size) = 0;
-
-		/**
-		 * Return true if the size argument of 'free' is required
-		 *
-		 * The generic 'Allocator' interface requires the caller of 'free'
-		 * to supply a valid size argument but not all implementations make
-		 * use of this argument. If this function returns false, it is safe
-		 * to call 'free' with an invalid size.
-		 *
-		 * Allocators that rely on the size argument must not be used for
-		 * constructing objects whose constructors may throw exceptions.
-		 * See the documentation of 'operator delete(void *, Allocator *)'
-		 * below for more details.
-		 */
-		virtual bool need_size_for_free() const { return true; }
 
 
 		/***************************
