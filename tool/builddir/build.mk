@@ -30,6 +30,10 @@
 #                 Normally, the libcache is located at 'var/libcache' and
 #                 there is no need to change it.
 #
+# CONTRIB_DIR   - location of ported 3rd-party source codes
+#
+# REQUIRED_GCC_VERSION - GCC version required for building Genode
+#
 
 ##
 ## Define global configuration variables
@@ -49,6 +53,7 @@ export LIB_CACHE_DIR    ?= $(BUILD_BASE_DIR)/var/libcache
 export LIB_PROGRESS_LOG ?= $(BUILD_BASE_DIR)/progress.log
 export LIB_DEP_FILE     ?= var/libdeps
 export ECHO             ?= echo -e
+export CONTRIB_DIR
 
 #
 # Convert user-defined directories to absolute directories
@@ -68,6 +73,12 @@ export SHELL := $(shell which bash)
 
 select_from_repositories = $(firstword $(foreach REP,$(REPOSITORIES),$(wildcard $(REP)/$(1))))
 
+-include $(call select_from_repositories,etc/specs.conf)
+-include $(BUILD_BASE_DIR)/etc/specs.conf
+export SPEC_FILES := $(foreach SPEC,$(SPECS),$(call select_from_repositories,mk/spec-$(SPEC).mk))
+include $(SPEC_FILES)
+export SPECS
+
 include $(BASE_DIR)/mk/global.mk
 
 export LIBGCC_INC_DIR = $(shell dirname `$(CUSTOM_CXX_LIB) -print-libgcc-file-name`)/include
@@ -75,23 +86,34 @@ export LIBGCC_INC_DIR = $(shell dirname `$(CUSTOM_CXX_LIB) -print-libgcc-file-na
 #
 # Find out about the target directories to build
 #
-DST_DIRS := $(filter-out all clean bin cleanall again run/%,$(MAKECMDGOALS))
+DST_DIRS := $(filter-out clean cleanall again run/%,$(MAKECMDGOALS))
 
 ifeq ($(MAKECMDGOALS),)
 DST_DIRS := *
 endif
 
 #
+# Tool chain version check
+#
+# If SPECS contains 'always_hybrid' we skip the check as the host tool chain is
+# used. Also, empty DST_DIRS is interpreted as a tool-chain agnostic target,
+# e.g., clean.
+#
+ifeq ($(filter always_hybrid,$(SPECS)),)
+ifneq ($(DST_DIRS),)
+REQUIRED_GCC_VERSION ?= 4.9.2
+GCC_VERSION := $(filter $(REQUIRED_GCC_VERSION) ,$(shell $(CUSTOM_CXX) --version))
+ifneq ($(GCC_VERSION), $(REQUIRED_GCC_VERSION))
+$(error "GCC version $(REQUIRED_GCC_VERSION) is required")
+endif
+endif
+endif
+
+#
 # Default rule: build all directories specified as make arguments
 #
-all $(DST_DIRS): gen_deps_and_build_targets
+_all $(DST_DIRS): gen_deps_and_build_targets
 	@true
-
--include $(call select_from_repositories,etc/specs.conf)
--include $(BUILD_BASE_DIR)/etc/specs.conf
-export SPEC_FILES := $(foreach SPEC,$(SPECS),$(call select_from_repositories,mk/spec-$(SPEC).mk))
-include $(SPEC_FILES)
-export SPECS
 
 ##
 ## First stage: generate library dependencies
@@ -186,10 +208,10 @@ traverse_dependencies: $(dir $(LIB_DEP_FILE)) init_libdep_file init_progress_log
 	            REP_DIR=$$rep TARGET_MK=$$rep/src/$$target \
 	            BUILD_BASE_DIR=$(BUILD_BASE_DIR) \
 	            SHELL=$(SHELL) \
-	            DARK_COL="$(DARK_COL)" DEFAULT_COL="$(DEFAULT_COL)"; \
+	            DARK_COL="$(DARK_COL)" DEFAULT_COL="$(DEFAULT_COL)" || result=false; \
 	    break; \
 	  done; \
-	done
+	done; $$result;
 
 .PHONY: $(LIB_DEP_FILE)
 $(LIB_DEP_FILE): traverse_dependencies
@@ -214,15 +236,6 @@ again: $(INSTALL_DIR)
 ##
 
 RUN_OPT ?=
-RUN_ENV := $(call select_from_repositories,run/env)
-
-ifeq ($(RUN_ENV),)
-run: run_no_env
-endif
-
-run_no_env:
-	@echo "Error: There exists no execution environment this platform"
-	@false
 
 # helper for run/% rule
 RUN_SCRIPT = $(call select_from_repositories,run/$*.run)
@@ -235,14 +248,14 @@ RUN_SCRIPT = $(call select_from_repositories,run/$*.run)
 
 run/%: $(call select_from_repositories,run/%.run) $(RUN_ENV)
 	$(VERBOSE)test -f "$(RUN_SCRIPT)" || (echo "Error: No run script for $*"; exit -1)
-	$(VERBOSE)$(GENODE_DIR)/tool/run --genode-dir $(GENODE_DIR) \
-	                                 --name $* \
-	                                 --specs "$(SPECS)" \
-	                                 --repositories "$(REPOSITORIES)" \
-	                                 --cross-dev-prefix "$(CROSS_DEV_PREFIX)" \
-	                                 --qemu-args "$(QEMU_OPT)" \
-	                                 --include $(RUN_ENV) $(RUN_OPT) \
-	                                 --include $(RUN_SCRIPT)
+	$(VERBOSE)$(GENODE_DIR)/tool/run/run --genode-dir $(GENODE_DIR) \
+	                                     --name $* \
+	                                     --specs "$(SPECS)" \
+	                                     --repositories "$(REPOSITORIES)" \
+	                                     --cross-dev-prefix "$(CROSS_DEV_PREFIX)" \
+	                                     --qemu-args "$(QEMU_OPT)" \
+	                                     $(RUN_OPT) \
+	                                     --include $(RUN_SCRIPT)
 
 ##
 ## Clean rules

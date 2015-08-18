@@ -61,7 +61,7 @@ Device drivers
 
 Device drivers usually reside in the 'src/drivers' subdirectory of source-code
 repositories. The most predominant repositories hosting device drivers are
-'os', 'linux_drivers', 'dde_ipxe', 'dde_linux'.
+'os', 'dde_ipxe', 'dde_linux'.
 
 
 Platform devices
@@ -73,8 +73,14 @@ Platform devices
   Implements the PCI-session interface using the PCI controller as found on
   x86 PC hardware. Using this interface, a client can probe for a particular
   device and request information about physical device resources (using the
-  'pci_device' interface). These information are subsequently used to request
-  respective IO_MEM, IRQ, and IO_PORT sessions at core.
+  'pci_device' interface). I/O resources for MMIO regions, I/O ports, and
+  interrupts can be requested by the provided PCI device abstraction.
+
+:'os/src/drivers/acpi':
+  On x86 platforms that use the APIC (namely Fiasco.OC, NOVA, and hw_x86_64)
+  this simple ACPI parser traverses the ACPI tables and updates interrupt line
+  information of PCI devices within the PCI config space. It uses the pci_drv as
+  a utility started as a child and exports its interface.
 
 
 UART devices
@@ -165,9 +171,8 @@ at the same time). Depending on the base platform, the implementation uses of
 different time sources. Time sources are either hardware timers, a time source
 provided by the kernel, or a pseudo time source (busy):
 
-:'nova':      PIT as time source
+:'nova':      NOVA kernel semaphores as time source
 :'codezero':  busy time source
-:'okl4_arm':  busy time source
 :'okl4_x86':  PIT as time source
 :'foc':       IPC timeout as time source
 :'fiasco':    IPC timeout as time source
@@ -184,13 +189,10 @@ All audio-output drivers implement the audio session interface defined at
 :'os/src/drivers/audio_out/linux':
   Uses ALSA as back-end on the Linux base platform.
 
-:'dde_oss/src/drivers/oss':
-  Sound drivers for the most common PC sound hardware, ported from the
-  Open Sound System project.
-
-:'linux_drivers/src/drivers/audio_out':
-  Sound drivers for the most common PC sound hardware, ported from the Linux
-  kernel.
+:'dde_bsd/src/drivers/audio_out':
+  Sound drivers ported from OpenBSD. Currently, the repository
+  includes support for Intel HD Audio as well as for Ensoniq AudioPCI
+  (ES1370) compatible sound cards.
 
 
 Block drivers
@@ -198,9 +200,6 @@ Block drivers
 
 All block drivers implement the block-session interface defined at
 'os/include/block_session/'.
-
-:'os/src/drivers/atapi':
-  Driver for ATAPI CD-ROM devices on x86 PCs.
 
 :'os/src/drivers/sd_card/pl180':
   Driver for SD-cards connected via the PL180 device as found on the PBX-A9
@@ -212,13 +211,20 @@ All block drivers implement the block-session interface defined at
 :'os/src/drivers/sd_card/exynos5':
   Driver for SD-cards and eMMC connected to Exynos-5-based platforms.
 
-:'linux_drivers/src/drivers/usb':
+:'os/src/drivers/sd_card/imx53':
+  Driver for SD-cards connected to the Freescale i.MX53 platform like the
+  Quick Start Board or the USB armory device.
+
+:'os/src/drivers/sd_card/rpi':
+  Driver for SD-cards connected to the Raspberry Pi.
+
+:'dde_linux/src/drivers/usb':
   USB driver that makes USB storage devices available as block sessions.
   For an example of using this driver, refer to the run script at
-  'linux_drivers/run/usb_storage'.
+  'dde_linux/run/usb_storage'.
 
 :'os/src/drivers/ahci':
-  Driver for SATA disks on x86 PCs.
+  Driver for SATA disks and CD-ROMs on x86 PCs.
 
 
 Network interface drivers
@@ -239,8 +245,9 @@ defined at 'os/include/nic_session'.
   Device drivers ported from the iPXE project. Supported devices are Intel
   E1000 and pcnet32.
 
-:'linux_drivers/src/drivers/madwifi':
-  The MadWifi wireless stack ported from the Linux kernel.
+:'dde_linux/src/drivers/wifi':
+  The wifi_drv component is a port of the Linux mac802.11 stack, including the
+  iwlwifi driver. It enables the use of Intel Wireless 6xxx and 7xxx cards.
 
 :'dde_linux/src/drivers/usb':
   For the OMAP4 platform, the USB driver contains the networking driver.
@@ -309,6 +316,13 @@ Separate components:
   a virtual frame buffer. The area is statically positioned. For more
   information, please refer to 'os/src/server/nit_fb/README'.
 
+:'gems/src/server/wm':
+  Window manager that implements the nitpicker session interface but manages
+  each client view as a separate window. The window decorations are provided
+  by a so-called decorator (e.g., 'gems/src/app/decorator'). The behaviour
+  is defined by a so-called window layouter such as the floating window
+  layouter located at 'gems/src/app/floating_window_layouter/'.
+
 :'demo/src/server/liquid_framebuffer':
   Implements the same translation as 'nit_fb' but by presenting an interactive
   window rather than a statically positioned screen area.
@@ -316,10 +330,6 @@ Separate components:
 :'os/src/server/tar_rom':
   Provides each file contained in a tar file obtained via Genode's ROM session
   as separate ROM session.
-
-:'os/src/server/fs_rom':
-  Provides files stored in a file system as individual ROM sessions. Please
-  refer to 'os/src/server/fs_rom' for more information.
 
 :'os/src/server/iso9660':
   Provides each file of an ISO9660 file system accessed via a block session as
@@ -332,13 +342,25 @@ Separate components:
   A read-only file-system implementation that reads data from a TAR archive,
   which, in turn, is provided by a ROM service.
 
+:'dde_rump/src/server/rump_fs':
+  A file-system server that contains various file-systems ported from the
+  NetBSD kernel.
+
 :'os/src/server/lx_fs':
   A file system server that makes the file system of a Linux base platform
   available to Genode.
 
+:'os/src/server/trace_fs':
+  A pseudo file system that can be used as a front end to core's TRACE
+  service.
+
 :'os/src/server/rom_blk':
   Provides the content of a ROM file as a block session, similar to the
   loop-mount mechanism on Linux
+
+:'os/src/server/ram_blk':
+  Provides the content of a RAM dataspace as a block session. In contrast
+  to 'rom_blk', this server provides a writeable block device.
 
 :'os/src/server/terminal_log':
   Adapter for forwarding LOG messages to a terminal session.
@@ -375,10 +397,32 @@ Separate components:
   A block service that fetches a virtual block device over the network from
   a HTTP server.
 
-:'fs_rom':
+:'os/src/server/fs_rom':
   A ROM service that translates the 'File_system' session interface to the
   'ROM' session' interface. Each request for a ROM file is handled by looking
   up an equally named file on the file system.
+  Please refer to 'os/src/server/fs_rom' for more information.
+
+:'os/src/server/dynamic_rom':
+  A simple ROM service that provides ROM modules that change in time according
+  to a configured timeline.
+
+:'os/src/server/report_rom':
+  A service that implements both the report session interface and the ROM
+  session interface. It reflects incoming reports as ROM modules.
+
+:'ports/src/app/openvpn':
+  OpenVPN enables access to remote network resources through a secure tunnel
+  by providing an encrypted connection to a remote host. It is plugged between
+  NIC server (such as a network driver) and NIC client.
+
+:'os/src/server/input_merger':
+  A component that merges input events from multiple sources into a single
+  stream.
+
+:'gems/src/server/nit_fader':
+  A wrapper for nitpicker's session interface that applies alpha-blending to
+  the of views a nitpicker client.
 
 Libraries:
 
@@ -417,9 +461,9 @@ Libraries:
 :'libports/lib/mk/stdcxx':
   Standard C++ library
 
-:'libports/lib/mk/gallium' + 'linux_drivers/lib/mk/gpu_i915_drv':
+:'libports/lib/mk/gallium':
   Translates the OpenGL API to a framebuffer session using the MESA OpenGL
-  stack and the Intel GEM GPU driver.
+  stack
 
 :'libports/lib/mk/pthread':
   Subset of the POSIX thread and semaphore API.
@@ -443,11 +487,12 @@ Libraries:
 :'libports/lib/mk/lua':
   Runtime for the Lua scripting language.
 
-:'qt4':
-  Qt4 framework, using nitpicker session and NIC session as back end.
-
 :'libports/lib/mk/qt5_*':
   Qt5 framework, using nitpicker session and NIC session as back end.
+
+:'libports/lib/mk/vfs_jitterentropy.mk':
+  A VFS plugin that makes a jitter-based random-number generator available
+  as a file within the process-local VFS.
 
 
 Applications
@@ -458,11 +503,16 @@ usually do not provide services. They are typically located in the 'src/app/'
 subdirectory of a repository. Most applications come with README files
 located in their respective directory.
 
-:'demo/src/app/backdrop':
-  Nitpicker client application that sets a PNG image as desktop background.
+:'gems/src/app/backdrop':
+  Nitpicker client application that sets a composition of PNG images as
+  desktop background.
 
 :'demo/src/app/launchpad':
   Graphical application for interactively starting and killing subsystems.
+
+:'gems/app/launcher': Graphical launcher of Genode subsystems.
+
+:'os/app/cli_monitor': Command-line-based launcher of Genode subsystems.
 
 :'demo/src/app/scout':
   Graphical hypertext browser used for Genode's default demonstration scenario.
@@ -471,20 +521,17 @@ located in their respective directory.
   Example program for using OpenGL via the Gallium3D graphics stack.
 
 :'ports/src/app/arora':
-  Arora is a Qt4-based web browser using the Webkit engine.
+  Arora is a Qt-based web browser using the Webkit engine.
 
 :'ports/src/app/gdb_monitor':
   Application that allows the debugging of a process via GDB over a remote
   connection.
 
-:'qt4/src/app/qt_launchpad':
-  Graphical application starter implemented using Qt4.
+:'libports/src/app/qt5/qt_launchpad':
+  Graphical application starter implemented using Qt.
 
-:'qt4/src/app/examples/':
-  Several example applications that come with Qt4.
-
-:'libports/src/app/qt5':
-  Qt5 examples including qt_launchpad and qt_avplay.
+:'libports/src/app/qt5/examples/':
+  Several example applications that come with Qt.
 
 :'os/src/app/xvfb':
   Is a proxy application that enables the integration of a virtual X server
@@ -515,7 +562,7 @@ Runtime environments
 :'ports-foc/src/l4android': L4Android is a variant of L4Linux that is able
   to execute the Android software stack on top of the Fiasco.OC kernel.
 
-:'ports/src/vancouver': Vancouver is a virtual-machine monitor developed for
+:'ports/src/app/seoul': Seoul is a virtual-machine monitor developed for
   the use with the NOVA platform. It virtualizes 32bit x86 PC hardware
   including various peripherals.
 
@@ -524,4 +571,6 @@ Runtime environments
   refer to 'os/src/server/loader/README'.
 
 :'ports/src/app/dosbox': A port of DosBox for executing DOS software.
+
+:'ports/src/virtualbox': VirtualBox running on top of the NOVA hypervisor.
 
