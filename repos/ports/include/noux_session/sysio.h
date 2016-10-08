@@ -48,13 +48,13 @@ namespace Noux {
 		enum { MAX_PATH_LEN = 512 };
 		typedef char Path[MAX_PATH_LEN];
 
-		enum { CHUNK_SIZE = 7*1024 };
+		enum { CHUNK_SIZE = 11*1024 };
 		typedef char Chunk[CHUNK_SIZE];
 
-		enum { ARGS_MAX_LEN = 4*1024 };
+		enum { ARGS_MAX_LEN = 5*1024 };
 		typedef char Args[ARGS_MAX_LEN];
 
-		enum { ENV_MAX_LEN  = 4*1024 };
+		enum { ENV_MAX_LEN  = 6*1024 };
 		typedef char Env[ENV_MAX_LEN];
 
 		typedef __SIZE_TYPE__ size_t;
@@ -82,7 +82,30 @@ namespace Noux {
 			STAT_MODE_BLOCKDEV  = 0060000,
 		};
 
-		typedef Vfs::Directory_service::Stat Stat;
+		/*
+		 * Must be POD (in contrast to the VFS type) because it's used in a union
+		 */
+		struct Stat
+		{
+			Vfs::file_size size;
+			unsigned       mode;
+			unsigned       uid;
+			unsigned       gid;
+			unsigned long  inode;
+			unsigned long  device;
+
+			Stat & operator= (Vfs::Directory_service::Stat const &stat)
+			{
+				size   = stat.size;
+				mode   = stat.mode;
+				uid    = stat.uid;
+				gid    = stat.gid;
+				inode  = stat.inode;
+				device = stat.device;
+
+				return *this;
+			}
+		};
 
 		/**
 		 * Argument structure used for ioctl syscall
@@ -107,7 +130,25 @@ namespace Noux {
 		enum { DIRENT_MAX_NAME_LEN = Vfs::Directory_service::DIRENT_MAX_NAME_LEN };
 
 		typedef Vfs::Directory_service::Dirent_type Dirent_type;
-		typedef Vfs::Directory_service::Dirent      Dirent;
+
+		/*
+		 * Must be POD (in contrast to the VFS type) because it's used in a union
+		 */
+		struct Dirent
+		{
+			unsigned long fileno;
+			Dirent_type   type;
+			char          name[DIRENT_MAX_NAME_LEN];
+
+			Dirent & operator= (Vfs::Directory_service::Dirent const &dirent)
+			{
+				fileno = dirent.fileno;
+				type   = dirent.type;
+				memcpy(name, dirent.name, DIRENT_MAX_NAME_LEN);
+
+				return *this;
+			}
+		};
 
 		enum Fcntl_cmd {
 			FCNTL_CMD_GET_FILE_STATUS_FLAGS,
@@ -266,7 +307,8 @@ namespace Noux {
 		enum Clock_Id        { CLOCK_ID_SECOND };
 
 		enum Fcntl_error     { FCNTL_ERR_CMD_INVALID = Vfs::Directory_service::NUM_GENERAL_ERRORS };
-		enum Execve_error    { EXECVE_NONEXISTENT    = Vfs::Directory_service::NUM_GENERAL_ERRORS };
+		enum Execve_error    { EXECVE_NONEXISTENT    = Vfs::Directory_service::NUM_GENERAL_ERRORS, EXECVE_NOMEM };
+		enum Fork_error      { FORK_NOMEM = Vfs::Directory_service::NUM_GENERAL_ERRORS };
 		enum Select_error    { SELECT_ERR_INTERRUPT };
 
 		/**
@@ -282,7 +324,9 @@ namespace Noux {
 		enum Connect_error   { CONNECT_ERR_ACCESS, CONNECT_ERR_AGAIN,
 		                       CONNECT_ERR_ALREADY, CONNECT_ERR_CONN_REFUSED,
 		                       CONNECT_ERR_NO_PERM, CONNECT_ERR_ADDR_IN_USE,
-		                       CONNECT_ERR_IN_PROGRESS, CONNECT_ERR_IS_CONNECTED };
+		                       CONNECT_ERR_IN_PROGRESS, CONNECT_ERR_IS_CONNECTED,
+		                       CONNECT_ERR_RESET, CONNECT_ERR_ABORTED,
+		                       CONNECT_ERR_NO_ROUTE };
 
 		enum Listen_error    { LISTEN_ERR_ADDR_IN_USE, LISTEN_ERR_NOT_SUPPORTED };
 
@@ -339,6 +383,7 @@ namespace Noux {
 			Utimes_error   utimes;
 			Wait4_error    wait4;
 			Kill_error     kill;
+			Fork_error     fork;
 
 		} error;
 
@@ -455,6 +500,8 @@ namespace Noux {
 			SYSIO_DECL(sync,        { }, { });
 
 			SYSIO_DECL(kill,        { int pid; Signal sig; }, { });
+
+			SYSIO_DECL(getdtablesize, { }, { int n; });
 		};
 	};
 };

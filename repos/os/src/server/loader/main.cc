@@ -5,7 +5,7 @@
  */
 
 /*
- * Copyright (C) 2010-2013 Genode Labs GmbH
+ * Copyright (C) 2010-2016 Genode Labs GmbH
  *
  * This file is part of the Genode OS framework, which is distributed
  * under the terms of the GNU General Public License version 2.
@@ -52,7 +52,6 @@ class Loader::Session_component : public Rpc_object<Session>
 
 			void _close(Rom_session_component *rom)
 			{
-				_ep.dissolve(rom);
 				_rom_sessions.remove(rom);
 				destroy(&_md_alloc, rom);
 			}
@@ -73,7 +72,9 @@ class Loader::Session_component : public Rpc_object<Session>
 				Lock::Guard guard(_lock);
 
 				while (_rom_sessions.first()) {
-					_close(_rom_sessions.first()); }
+					_ep.remove(_rom_sessions.first());
+					_close(_rom_sessions.first());
+				}
 			}
 
 			Genode::Session_capability session(char     const *args,
@@ -83,13 +84,10 @@ class Loader::Session_component : public Rpc_object<Session>
 				try {
 					Lock::Guard guard(_lock);
 
-					char name[Session::Name::MAX_SIZE];
-					
-					/* extract filename from session arguments */
-					Arg_string::find_arg(args, "filename")
-						.string(name, sizeof(name), "");
+					Session_label const label = label_from_args(args);
+					Session_label name = label.last_element();
 
-					Rom_module &module = _rom_modules.lookup_and_lock(name);
+					Rom_module &module = _rom_modules.lookup_and_lock(name.string());
 
 					Rom_session_component *rom = new (&_md_alloc)
 						Rom_session_component(module);
@@ -108,10 +106,12 @@ class Loader::Session_component : public Rpc_object<Session>
 			{
 				Lock::Guard guard(_lock);
 
-				Rpc_object_base *rom = _ep.lookup_and_lock(session);
+				Rom_session_component *component;
 
-				Rom_session_component *component =
-					dynamic_cast<Rom_session_component *>(rom);
+				_ep.apply(session, [&] (Rom_session_component *rsc) {
+					component = rsc;
+					if (component) _ep.remove(component);
+				});
 
 				if (component) {
 					_close(component);
@@ -125,7 +125,7 @@ class Loader::Session_component : public Rpc_object<Session>
 		};
 
 		/**
-		 * Common base class of 'Local_cpu_service' and 'Local_rm_service'
+		 * Common base class of 'Local_cpu_service' and 'Local_pd_service'
 		 */
 		struct Intercepted_parent_service : Service
 		{
@@ -153,7 +153,7 @@ class Loader::Session_component : public Rpc_object<Session>
 			                                   Affinity const &affinity)
 			{
 				Capability<Cpu_session> cap = env()->parent()->session<Cpu_session>(args, affinity);
-				Cpu_session_client(cap).exception_handler(Thread_capability(), fault_sigh);
+				Cpu_session_client(cap).exception_sigh(fault_sigh);
 				return cap;
 			}
 
@@ -165,18 +165,22 @@ class Loader::Session_component : public Rpc_object<Session>
 		};
 
 		/**
-		 * Intercept RM session requests to install default fault handler
+		 * Intercept PD session requests to install default fault handler
 		 */
-		struct Local_rm_service : Intercepted_parent_service
+		struct Local_pd_service : Intercepted_parent_service
 		{
-			Local_rm_service() : Intercepted_parent_service("RM") { }
+			Local_pd_service() : Intercepted_parent_service("PD") { }
 
 			Genode::Session_capability session(char     const *args,
 			                                   Affinity const &affinity)
 			{
-				Capability<Rm_session> cap = env()->parent()->session<Rm_session>(args, affinity);
-				Rm_session_client(cap).fault_handler(fault_sigh);
-				return cap;
+				Pd_session_client pd(env()->parent()->session<Pd_session>(args, affinity));
+
+				Region_map_client(pd.address_space()).fault_handler(fault_sigh);
+				Region_map_client(pd.stack_area())   .fault_handler(fault_sigh);
+				Region_map_client(pd.linker_area())  .fault_handler(fault_sigh);
+
+				return pd;
 			}
 		};
 
@@ -249,11 +253,12 @@ class Loader::Session_component : public Rpc_object<Session>
 		Heap                      _md_alloc;
 		size_t                    _subsystem_ram_quota_limit;
 		Rpc_entrypoint            _ep;
+		Dataspace_capability      _ldso_ds;
 		Service_registry          _parent_services;
 		Rom_module_registry       _rom_modules;
 		Local_rom_service         _rom_service;
 		Local_cpu_service         _cpu_service;
-		Local_rm_service          _rm_service;
+		Local_pd_service          _pd_service;
 		Local_nitpicker_service   _nitpicker_service;
 		Signal_context_capability _fault_sigh;
 		Child                    *_child;
@@ -274,13 +279,15 @@ class Loader::Session_component : public Rpc_object<Session>
 		/**
 		 * Constructor
 		 */
-		Session_component(size_t quota, Ram_session &ram, Cap_session &cap)
+		Session_component(size_t quota, Ram_session &ram, Cap_session &cap,
+		                  Dataspace_capability ldso_ds)
 		:
 			_ram_quota(quota),
 			_ram_session_client(env()->ram_session_cap(), _ram_quota),
 			_md_alloc(&_ram_session_client, env()->rm_session()),
 			_subsystem_ram_quota_limit(0),
 			_ep(&cap, STACK_SIZE, "session_ep"),
+			_ldso_ds(ldso_ds),
 			_rom_modules(_ram_session_client, _md_alloc),
 			_rom_service(_ep, _md_alloc, _rom_modules),
 			_nitpicker_service(_ep, _ram_session_client, _md_alloc),
@@ -349,10 +356,10 @@ class Loader::Session_component : public Rpc_object<Session>
 			_cpu_service.fault_sigh = sigh;
 
 			/*
-			 * RM fault handler for RM sessions originating from the
+			 * Region-map fault handler for PD sessions originating from the
 			 * subsystem.
 			 */
-			_rm_service.fault_sigh = sigh;
+			_pd_service.fault_sigh = sigh;
 
 			/*
 			 * CPU exception and RM fault handler for the immediate child.
@@ -360,8 +367,7 @@ class Loader::Session_component : public Rpc_object<Session>
 			_fault_sigh = sigh;
 		}
 
-		void start(Name const &binary_name, Name const &label,
-		           Genode::Native_pd_args const &pd_args) override
+		void start(Name const &binary_name, Name const &label) override
 		{
 			if (_child) {
 				PWRN("cannot start subsystem twice");
@@ -374,10 +380,10 @@ class Loader::Session_component : public Rpc_object<Session>
 
 			try {
 				_child = new (&_md_alloc)
-					Child(binary_name.string(), label.string(),
-					      pd_args, _ep, _ram_session_client,
+					Child(binary_name.string(), label.string(), _ldso_ds,
+					      _ep, _ram_session_client,
 					      ram_quota, _parent_services, _rom_service,
-					      _cpu_service, _rm_service, _nitpicker_service,
+					      _cpu_service, _pd_service, _nitpicker_service,
 					      _fault_sigh);
 			}
 			catch (Genode::Parent::Service_denied) {
@@ -400,8 +406,9 @@ class Loader::Root : public Root_component<Session_component>
 {
 	private:
 
-		Ram_session &_ram;
-		Cap_session &_cap;
+		Ram_session         &_ram;
+		Cap_session         &_cap;
+		Dataspace_capability _ldso_ds;
 
 	protected:
 
@@ -410,7 +417,7 @@ class Loader::Root : public Root_component<Session_component>
 			size_t quota =
 				Arg_string::find_arg(args, "ram_quota").ulong_value(0);
 
-			return new (md_alloc()) Session_component(quota, _ram, _cap);
+			return new (md_alloc()) Session_component(quota, _ram, _cap, _ldso_ds);
 		}
 
 	public:
@@ -423,12 +430,22 @@ class Loader::Root : public Root_component<Session_component>
 		 *                    component
 		 */
 		Root(Rpc_entrypoint &session_ep, Allocator &md_alloc,
-		     Ram_session &ram, Cap_session &cap)
+		     Ram_session &ram, Cap_session &cap, Dataspace_capability ldso_ds)
 		:
 			Root_component<Session_component>(&session_ep, &md_alloc),
-			_ram(ram), _cap(cap)
+			_ram(ram), _cap(cap), _ldso_ds(ldso_ds)
 		{ }
 };
+
+
+Genode::Dataspace_capability request_ldso_ds()
+{
+	try {
+		static Genode::Rom_connection rom("ld.lib.so");
+		return rom.dataspace();
+	} catch (...) { }
+	return Genode::Dataspace_capability();
+}
 
 
 int main()
@@ -439,7 +456,8 @@ int main()
 	static Cap_connection cap;
 	static Rpc_entrypoint ep(&cap, STACK_SIZE, "loader_ep");
 
-	static Loader::Root root(ep, *env()->heap(), *env()->ram_session(), cap);
+	static Loader::Root root(ep, *env()->heap(), *env()->ram_session(), cap,
+	                         request_ldso_ds());
 
 	env()->parent()->announce(ep.manage(&root));
 

@@ -18,7 +18,6 @@
 #include <base/cache.h>
 #include <base/ipc.h>
 #include <base/stdint.h>
-#include <base/native_types.h>
 #include <base/printf.h>
 
 /* NOVA includes */
@@ -32,7 +31,7 @@ namespace Genode {
 
 			addr_t _dst_addr;
 			addr_t _core_local_addr;
-			bool   _write_combined;
+			Cache_attribute _attr;
 			size_t _size_log2;
 			bool   _rw;
 
@@ -49,8 +48,7 @@ namespace Genode {
 			        bool rw = true)
 			:
 				_dst_addr(dst_addr), _core_local_addr(map_addr),
-				_write_combined(c != CACHED), _size_log2(size_log2),
-				_rw(rw)
+				_attr(c), _size_log2(size_log2), _rw(rw)
 			{ }
 
 			/**
@@ -67,7 +65,8 @@ namespace Genode {
 				                     Nova::Rights(true, _rw, true));
 			}
 
-			bool  write_combined() { return _write_combined; };
+			bool dma() { return _attr != CACHED; };
+			bool write_combined() { return _attr == WRITE_COMBINED; };
 
 			addr_t dst_addr() { return _dst_addr; }
 	};
@@ -77,20 +76,23 @@ namespace Genode {
 	{
 		private:
 
-			/**
-			 * Page-fault type
-			 */
-			enum Pf_type {
-				TYPE_READ  = 0x4,
-				TYPE_WRITE = 0x2,
-				TYPE_EXEC  = 0x1,
-			};
-
 			addr_t  _fault_ip;
 			addr_t  _fault_addr;
-			Pf_type _fault_type;
+			uint8_t _fault_type;
 
 		public:
+
+			/*
+			 * Intel manual: 6.15 EXCEPTION AND INTERRUPT REFERENCE
+			 *                    Interrupt 14—Page-Fault Exception (#PF)
+			 */
+			enum {
+				ERR_I = 1 << 4,
+				ERR_R = 1 << 3,
+				ERR_U = 1 << 2,
+				ERR_W = 1 << 1,
+				ERR_P = 1 << 0,
+			};
 
 			/**
 			 * Wait for page-fault info
@@ -123,12 +125,12 @@ namespace Genode {
 			/**
 			 * Return true if fault was a write fault
 			 */
-			bool is_write_fault() const { return _fault_type == TYPE_WRITE; }
+			bool write_fault() const { return _fault_type & ERR_W; }
 
 			/**
 			 * Return true if last fault was an exception
 			 */
-			bool is_exception() const
+			bool exception() const
 			{
 				/*
 				 * Reflection of exceptions is not supported on this platform.

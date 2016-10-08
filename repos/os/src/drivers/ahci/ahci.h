@@ -16,28 +16,31 @@
 
 #include <block/component.h>
 #include <os/attached_mmio.h>
+#include <os/server.h>
+#include <util/retry.h>
 #include <util/volatile_object.h>
 
 static bool constexpr verbose = false;
 
 namespace Platform {
 	struct Hba;
-	Hba &init(Genode::Mmio::Delayer &delayer);
+	Hba &init(Genode::Env &env, Genode::Mmio::Delayer &delayer);
 };
 
 
 struct Ahci_root
 {
-	virtual Server::Entrypoint &entrypoint() = 0;
+	virtual Genode::Entrypoint &entrypoint() = 0;
 	virtual void announce()                  = 0;
 };
 
 
 namespace Ahci_driver {
 
-	void init(Ahci_root &ep);
+	void init(Genode::Env &env, Genode::Allocator &alloc, Ahci_root &ep, bool support_atapi);
 
-	bool is_avail(long device_num);
+	bool avail(long device_num);
+	long device_number(char const *model_num, char const *serial_num);
 
 	Block::Driver *claim_port(long device_num);
 	void           free_port(long device_num);
@@ -82,13 +85,13 @@ struct Hba : Genode::Attached_mmio
 		struct Np   : Bitfield<0, 4> { };  /* number of ports */
 		struct Ncs  : Bitfield<8, 5> { };  /* number of command slots */
 		struct Iss  : Bitfield<20, 4> { }; /* interface speed support */
-		struct Sncg : Bitfield<30, 1> { }; /* supports native command queuing */
+		struct Sncq : Bitfield<30, 1> { }; /* supports native command queuing */
 		struct Sa64 : Bitfield<31, 1> { }; /* supports 64 bit addressing */
 	};
 
 	unsigned port_count()    { return read<Cap::Np>() + 1; }
 	unsigned command_slots() { return read<Cap::Ncs>() + 1; }
-	bool     ncg()           { return !!read<Cap::Sncg>(); }
+	bool     ncq()           { return !!read<Cap::Sncq>(); }
 	bool     supports_64bit(){ return !!read<Cap::Sa64>(); }
 
 	/**
@@ -384,61 +387,15 @@ struct Command_table
 };
 
 
-struct Identity : Genode::Mmio
-{
-	Identity(Genode::addr_t base) : Mmio(base) { }
-
-	struct Queue_depth : Register<0x96, 16>
-	{
-		struct Max_depth : Bitfield<0, 5> { };
-	};
-
-	struct Sata_caps   : Register<0x98, 16>
-	{
-		struct Ncq_support : Bitfield<8, 1> { };
-	};
-
-	struct Sector_count : Register<0xc8, 64> { };
-
-	struct Logical_block  : Register<0xd4, 16>
-	{
-		struct Per_physical : Bitfield<0,  3> { }; /* 2^X logical per physical */
-		struct Longer_512   : Bitfield<12, 1> { };
-		struct Multiple     : Bitfield<13, 1> { }; /* multiple logical blocks per physical */
-	};
-
-	struct Logical_words : Register<0xea, 32> { }; /* words (16 bit) per logical block */
-
-	struct Alignment : Register<0x1a2, 16>
-	{
-		struct Logical_offset : Bitfield<0, 14> { }; /* offset first logical block in physical */
-	};
-
-	void info()
-	{
-		PLOG("\t\tqueue depth: %u ncg: %u",
-		     read<Queue_depth::Max_depth>() + 1,
-		     read<Sata_caps::Ncq_support>());
-		PLOG("\t\tnumer of sectors: %llu", read<Sector_count>());
-		PLOG("\t\tmultiple logical blocks per physical: %s",
-		     read<Logical_block::Multiple>() ? "yes" : "no");
-		PLOG("\t\tlogical blocks per physical: %u",
-		     1U << read<Logical_block::Per_physical>());
-		PLOG("\t\tlogical block size is above 512 byte: %s",
-		     read<Logical_block::Longer_512>() ? "yes" : "no");
-		PLOG("\t\twords (16bit) per logical block: %u",
-		     read<Logical_words>());
-		PLOG("\t\toffset of first logical block within physical: %u",
-		     read<Alignment::Logical_offset>());
-	}
-};
-
-
 /**
  * AHCI port
  */
 struct Port : Genode::Mmio
 {
+	struct Not_ready : Genode::Exception { };
+
+	Genode::Region_map &rm;
+
 	Hba           &hba;
 	Platform::Hba &platform_hba;
 	unsigned       cmd_slots = hba.command_slots();
@@ -462,29 +419,31 @@ struct Port : Genode::Mmio
 
 	State state = NONE;
 
-	Port(Hba &hba, Platform::Hba &platform_hba, unsigned number)
-	: Mmio(hba.base + offset() + (number * size())), hba(hba),
-	  platform_hba(platform_hba)
+	Port(Genode::Region_map &rm, Hba &hba, Platform::Hba &platform_hba,
+	     unsigned number)
+	:
+		Mmio(hba.base + offset() + (number * size())),
+		rm(rm), hba(hba), platform_hba(platform_hba)
 	{
 		stop();
 		if (!wait_for<Cmd::Cr>(0, Hba::delayer(), 500, 1000))
-			PERR("failed to stop command list processing");
+			Genode::error("failed to stop command list processing");
 	}
 
 	virtual ~Port()
 	{
 		if (device_ds.valid()) {
-			Genode::env()->rm_session()->detach((void *)cmd_list);
+			rm.detach((void *)cmd_list);
 			platform_hba.free_dma_buffer(device_ds);
 		}
 
 		if (cmd_ds.valid()) {
-			Genode::env()->rm_session()->detach((void *)cmd_table);
+			rm.detach((void *)cmd_table);
 			platform_hba.free_dma_buffer(cmd_ds);
 		}
 
 		if (device_info_ds.valid()) {
-			Genode::env()->rm_session()->detach((void*)device_info);
+			rm.detach((void*)device_info);
 			platform_hba.free_dma_buffer(device_info_ds);
 		}
 	}
@@ -539,6 +498,12 @@ struct Port : Genode::Mmio
 		struct Prcs : Bitfield<22, 1> { }; /* PhyRdy change status */
 		struct Infs : Bitfield<26, 1> { }; /* interface non-fatal error */
 		struct Ifs  : Bitfield<27, 1> { }; /* interface fatal error */
+
+		/* ncq irq */
+		struct Fpdma_irq   : Sdbs { };
+
+		/* non-ncq irq */
+		struct Dma_ext_irq : Bitfield<0, 3> { };
 	};
 
 	void ack_irq()
@@ -562,9 +527,9 @@ struct Port : Genode::Mmio
 	struct Ie : Register<0x14, 32, 1>
 	{
 		struct Dhre : Bitfield<0, 1> { };  /* device to host register FIS interrupt */
-		struct Pse  : Bitfield<1, 2> { };  /* PIO setup FIS interrupt */
+		struct Pse  : Bitfield<1, 1> { };  /* PIO setup FIS interrupt */
 		struct Dse  : Bitfield<2, 1> { };  /* DMA setup FIS interrupt */
-		struct Sdbe : Bitfield<3, 1> { };  /* set device bits FIS interrupt (ncg) */
+		struct Sdbe : Bitfield<3, 1> { };  /* set device bits FIS interrupt (ncq) */
 		struct Ufe  : Bitfield<4, 1> { };  /* unknown FIS */
 		struct Dpe  : Bitfield<5, 1> { };  /* descriptor processed */
 		struct Ifne : Bitfield<26, 1> { }; /* interface non-fatal error */
@@ -610,12 +575,12 @@ struct Port : Genode::Mmio
 			return;
 
 		if (!wait_for<Tfd::Sts_bsy>(0, hba.delayer(), 500, 1000)) {
-			PERR("HBA busy unable to start command processing.");
+			Genode::error("HBA busy unable to start command processing.");
 			return;
 		}
 
 		if (!wait_for<Tfd::Sts_drq>(0, hba.delayer(), 500, 1000)) {
-			PERR("HBA in DRQ unable to start command processing.");
+			Genode::error("HBA in DRQ unable to start command processing.");
 			return;
 		}
 
@@ -683,9 +648,16 @@ struct Port : Genode::Mmio
 			/* try to wake up device */
 			write<Cmd::Icc>(Ssts::Ipm::ACTIVE);
 
-			while ((Ssts::Dec::get(status) != Ssts::Dec::ESTABLISHED) ||
-			      !(Ssts::Ipm::get(status) &  Ssts::Ipm::ACTIVE))
-				status = read<Ssts>();
+			Genode::retry<Not_ready>(
+				[&] {
+							if ((Ssts::Dec::get(status) != Ssts::Dec::ESTABLISHED) ||
+							    !(Ssts::Ipm::get(status) &  Ssts::Ipm::ACTIVE))
+								throw Not_ready();
+				},
+				[&] {
+					hba.delayer().usleep(1000);
+					status = read<Ssts>();
+				}, 10);
 		}
 
 		return ((Ssts::Dec::get(status) == Ssts::Dec::ESTABLISHED) &&
@@ -704,14 +676,14 @@ struct Port : Genode::Mmio
 	void reset()
 	{
 		if (read<Cmd::St>())
-			PWRN("CMD.ST bit set during device reset --> unknown behavior");
+			Genode::warning("CMD.ST bit set during device reset --> unknown behavior");
 
 		write<Sctl::Det>(1);
 		hba.delayer().usleep(1000);
 		write<Sctl::Det>(0);
 
 		if (!wait_for<Ssts::Dec>(Ssts::Dec::ESTABLISHED, hba.delayer()))
-			PWRN("Port reset failed");
+			Genode::warning("Port reset failed");
 	}
 
 	/**
@@ -775,7 +747,7 @@ struct Port : Genode::Mmio
 
 		/* command list 1K */
 		addr_t phys = Genode::Dataspace_client(device_ds).phys_addr();
-		cmd_list    = (addr_t)Genode::env()->rm_session()->attach(device_ds);
+		cmd_list    = (addr_t)rm.attach(device_ds);
 		command_list_base(phys);
 
 		/* receive FIS base 256 byte */
@@ -785,7 +757,7 @@ struct Port : Genode::Mmio
 		/* command table */
 		size_t cmd_size = Genode::align_addr(cmd_slots * Command_table::size(), 12);
 		cmd_ds          = platform_hba.alloc_dma_buffer(cmd_size);
-		cmd_table       = (addr_t)Genode::env()->rm_session()->attach(cmd_ds);
+		cmd_table       = (addr_t)rm.attach(cmd_ds);
 		phys            = (addr_t)Genode::Dataspace_client(cmd_ds).phys_addr();
 
 		/* set command table addresses in command list */
@@ -796,7 +768,7 @@ struct Port : Genode::Mmio
 
 		/* dataspace for device info */
 		device_info_ds = platform_hba.alloc_dma_buffer(0x1000);
-		device_info    = Genode::env()->rm_session()->attach(device_info_ds);
+		device_info    = rm.attach(device_info_ds);
 	}
 
 	Genode::addr_t command_table_addr(unsigned slot)
@@ -821,27 +793,34 @@ struct Port : Genode::Mmio
 
 struct Port_driver : Port, Block::Driver
 {
-	Genode::Signal_context_capability state_change_cap;
+	Ahci_root &root;
+	unsigned  &sem;
 
-	Port_driver(Port &port, Genode::Signal_context_capability state_change_cap)
-	: Port(port), state_change_cap(state_change_cap)
-	{ }
+	Port_driver(Port &port, Ahci_root &root, unsigned &sem)
+	: Port(port), root(root), sem(sem) {
+		sem++; }
 
 	virtual void handle_irq() = 0;
 
-	void state_change() { Genode::Signal_transmitter(state_change_cap).submit(); }
+	void state_change()
+	{
+		if (--sem) return;
+
+		/* announce service */
+		root.announce();
+	}
 
 	void sanity_check(Block::sector_t block_number, Genode::size_t count)
 	{
 		/* max. PRDT size is 4MB */
 		if (count * block_size() > 4 * 1024 * 1024) {
-			PERR("error: maximum supported packet size is 4MB");
+			Genode::error("error: maximum supported packet size is 4MB");
 			throw Io_error();
 		}
 
 		/* sanity check */
 		if (block_number + count > block_count()) {
-			PERR("error: requested blocks are outside of device");
+			Genode::error("error: requested blocks are outside of device");
 			throw Io_error();
 		}
 	}

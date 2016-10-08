@@ -16,14 +16,17 @@
  * under the terms of the GNU General Public License version 2.
  */
 
-#ifndef _CORE__INCLUDE__LINUX__DATASPACE_COMPONENT_H_
-#define _CORE__INCLUDE__LINUX__DATASPACE_COMPONENT_H_
+#ifndef _CORE__INCLUDE__DATASPACE_COMPONENT_H_
+#define _CORE__INCLUDE__DATASPACE_COMPONENT_H_
 
 #include <linux_dataspace/linux_dataspace.h>
 #include <util/string.h>
 #include <util/misc_math.h>
 #include <base/rpc_server.h>
 #include <base/printf.h>
+
+/* base-internal includes */
+#include <base/internal/capability_space_tpl.h>
 
 namespace Genode {
 
@@ -36,15 +39,18 @@ namespace Genode {
 	{
 		private:
 
+			Filename       _fname;              /* filename for mmap          */
 			size_t         _size;               /* size of dataspace in bytes */
 			addr_t         _addr;               /* meaningless on linux       */
-			Filename       _fname;              /* filename for mmap          */
 			int            _fd;                 /* file descriptor            */
 			bool           _writable;           /* false if read-only         */
 
 			/* Holds the dataspace owner if a distinction between owner and
 			 * others is necessary on the dataspace, otherwise it is 0 */
 			Dataspace_owner * _owner;
+
+			static Filename _file_name(const char *args);
+			size_t _file_size();
 
 		public:
 
@@ -78,12 +84,11 @@ namespace Genode {
 			}
 
 			/**
-			 * Define corresponding filename of dataspace
+			 * This constructor is especially used for ROM dataspaces
 			 *
-			 * The file name is only relevant for ROM dataspaces that should
-			 * be executed via execve.
+			 * \param args  session parameters containing 'filename' key/value
 			 */
-			void fname(const char *fname) { strncpy(_fname.buf, fname, sizeof(_fname.buf)); }
+			Dataspace_component(const char *args);
 
 			/**
 			 * Assign file descriptor to dataspace
@@ -120,11 +125,12 @@ namespace Genode {
 
 			Untyped_capability fd()
 			{
-				typedef Untyped_capability::Dst Dst;
-				enum { DUMMY_LOCAL_NAME = 0 };
-				return Untyped_capability(Dst(_fd), DUMMY_LOCAL_NAME);
+				Untyped_capability fd_cap =
+					Capability_space::import(Rpc_destination(_fd), Rpc_obj_key());
+
+				return fd_cap;
 			}
 	};
 }
 
-#endif /* _CORE__INCLUDE__LINUX__DATASPACE_COMPONENT_H_ */
+#endif /* _CORE__INCLUDE__DATASPACE_COMPONENT_H_ */

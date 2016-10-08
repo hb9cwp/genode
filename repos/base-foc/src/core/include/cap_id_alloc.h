@@ -11,14 +11,14 @@
  * under the terms of the GNU General Public License version 2.
  */
 
-#ifndef _CORE__INCLUDE__CAP_IP_ALLOC_H_
-#define _CORE__INCLUDE__CAP_IP_ALLOC_H_
+#ifndef _CORE__INCLUDE__CAP_ID_ALLOC_H_
+#define _CORE__INCLUDE__CAP_ID_ALLOC_H_
 
 /* Genode includes */
 #include <base/allocator_avl.h>
 #include <base/exception.h>
 #include <base/lock.h>
-#include <base/sync_allocator.h>
+#include <synced_range_allocator.h>
 
 namespace Genode {
 
@@ -33,8 +33,8 @@ namespace Genode {
 				CAP_ID_OFFSET  = 1 << 2
 			};
 
-			Synchronized_range_allocator<Allocator_avl> _id_alloc;
-			Lock                                        _lock;
+			Synced_range_allocator<Allocator_avl> _id_alloc;
+			Lock                                  _lock;
 
 		public:
 
@@ -48,4 +48,4 @@ namespace Genode {
 	};
 }
 
-#endif /* _CORE__INCLUDE__CAP_IP_ALLOC_H_ */
+#endif /* _CORE__INCLUDE__CAP_ID_ALLOC_H_ */

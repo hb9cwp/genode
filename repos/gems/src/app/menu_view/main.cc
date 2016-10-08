@@ -18,146 +18,15 @@
 #include <input/event.h>
 #include <os/reporter.h>
 
+/* gems includes */
+#include <gems/nitpicker_buffer.h>
+
 
 struct Menu_view::Main
 {
 	Nitpicker::Connection nitpicker;
 
-	/*
-	 * The back buffer (surface) is RGB888 with interleaved alpha values.
-	 */
-	struct Buffer
-	{
-		Nitpicker::Connection &nitpicker;
-
-		Framebuffer::Mode const mode;
-
-		/**
-		 * Return dataspace capability for virtual framebuffer
-		 */
-		Dataspace_capability _ds_cap(Nitpicker::Connection &nitpicker)
-		{
-			/* setup virtual framebuffer mode */
-			nitpicker.buffer(mode, true);
-
-			if (mode.format() != Framebuffer::Mode::RGB565) {
-				PWRN("Color mode %d not supported\n", (int)mode.format());
-				return Dataspace_capability();
-			}
-
-			return nitpicker.framebuffer()->dataspace();
-		}
-
-		Attached_dataspace fb_ds { _ds_cap(nitpicker) };
-
-		size_t pixel_surface_num_bytes() const
-		{
-			return size().count()*sizeof(Pixel_rgb888);
-		}
-
-		size_t alpha_surface_num_bytes() const
-		{
-			return size().count();
-		}
-
-		Attached_ram_dataspace pixel_surface_ds { env()->ram_session(), pixel_surface_num_bytes() };
-		Attached_ram_dataspace alpha_surface_ds { env()->ram_session(), alpha_surface_num_bytes() };
-
-		/**
-		 * Constructor
-		 */
-		Buffer(Nitpicker::Connection &nitpicker, Area size)
-		:
-			nitpicker(nitpicker),
-			mode(size.w(), size.h(), nitpicker.mode().format())
-		{ }
-
-		/**
-		 * Return size of virtual framebuffer
-		 */
-		Surface_base::Area size() const
-		{
-			return Surface_base::Area(mode.width(), mode.height());
-		}
-
-		/**
-		 * Return back buffer as RGB888 painting surface
-		 */
-		Surface<Pixel_rgb888> pixel_surface()
-		{
-			return Surface<Pixel_rgb888>(pixel_surface_ds.local_addr<Pixel_rgb888>(), size());
-		}
-
-		Surface<Pixel_alpha8> alpha_surface()
-		{
-			return Surface<Pixel_alpha8>(alpha_surface_ds.local_addr<Pixel_alpha8>(), size());
-		}
-
-		void reset_surface()
-		{
-			size_t const num_pixels = pixel_surface().size().count();
-			Genode::memset(alpha_surface().addr(), 0, num_pixels);
-			Genode::memset(pixel_surface().addr(), 0, num_pixels*sizeof(Pixel_rgb888));
-		}
-
-		template <typename DST_PT, typename SRC_PT>
-		void _convert_back_to_front(DST_PT                *front_base,
-		                            Texture<SRC_PT> const &texture,
-		                            Rect            const  clip_rect)
-		{
-			Surface<DST_PT> surface(front_base, size());
-
-			surface.clip(clip_rect);
-
-			Dither_painter::paint(surface, texture);
-		}
-
-		void _update_input_mask()
-		{
-			unsigned const num_pixels = size().count();
-
-			unsigned char * const alpha_base = fb_ds.local_addr<unsigned char>()
-			                                 + mode.bytes_per_pixel()*num_pixels;
-
-			unsigned char * const input_base = alpha_base + num_pixels;
-
-			unsigned char const *src = alpha_base;
-			unsigned char       *dst = input_base;
-
-			/*
-			 * Set input mask for all pixels where the alpha value is above a
-			 * given threshold. The threshold is defines such that typical
-			 * drop shadows are below the value.
-			 */
-			unsigned char const threshold = 100;
-
-			for (unsigned i = 0; i < num_pixels; i++)
-				*dst++ = (*src++) > threshold;
-		}
-
-		void flush_surface()
-		{
-			/* represent back buffer as texture */
-			Texture<Pixel_rgb888>
-				texture(pixel_surface_ds.local_addr<Pixel_rgb888>(),
-				        alpha_surface_ds.local_addr<unsigned char>(),
-				        size());
-
-			// XXX track dirty rectangles
-			Rect const clip_rect(Point(0, 0), size());
-
-			Pixel_rgb565 *pixel_base = fb_ds.local_addr<Pixel_rgb565>();
-			Pixel_alpha8 *alpha_base = fb_ds.local_addr<Pixel_alpha8>()
-			                         + mode.bytes_per_pixel()*size().count();
-
-			_convert_back_to_front(pixel_base, texture, clip_rect);
-			_convert_back_to_front(alpha_base, texture, clip_rect);
-
-			_update_input_mask();
-		}
-	};
-
-	Lazy_volatile_object<Buffer> buffer;
+	Lazy_volatile_object<Nitpicker_buffer> buffer;
 
 	Nitpicker::Session::View_handle view_handle = nitpicker.create_view();
 
@@ -280,8 +149,9 @@ void Menu_view::Main::handle_dialog_update(unsigned)
 		Xml_node dialog_xml(dialog_rom.local_addr<char>());
 
 		root_widget.update(dialog_xml);
+		root_widget.size(root_widget.min_size());
 	} catch (...) {
-		PERR("failed to construct widget tree");
+		Genode::error("failed to construct widget tree");
 	}
 
 	schedule_redraw = true;
@@ -304,8 +174,7 @@ void Menu_view::Main::handle_config(unsigned)
 
 	try {
 		hover_reporter.enabled(config()->xml_node().sub_node("report")
-		                                           .attribute("hover")
-		                                           .has_value("yes"));
+		                                           .attribute_value("hover", false));
 	} catch (...) {
 		hover_reporter.enabled(false);
 	}
@@ -323,14 +192,14 @@ void Menu_view::Main::handle_input(unsigned)
 
 		Input::Event ev = ev_buf[i];
 
-		if (ev.is_absolute_motion()) {
+		if (ev.absolute_motion()) {
 
 			Point const at = Point(ev.ax(), ev.ay()) - position;
 			Widget::Unique_id const new_hovered = root_widget.hovered(at);
 
 			if (hovered != new_hovered) {
 
-				if (hover_reporter.is_enabled()) {
+				if (hover_reporter.enabled()) {
 					Genode::Reporter::Xml_generator xml(hover_reporter, [&] () {
 						root_widget.gen_hover_model(xml, at);
 					});
@@ -348,7 +217,7 @@ void Menu_view::Main::handle_input(unsigned)
 
 			hovered = Widget::Unique_id();
 
-			if (hover_reporter.is_enabled()) {
+			if (hover_reporter.enabled()) {
 				Genode::Reporter::Xml_generator xml(hover_reporter, [&] () { });
 			}
 		}
@@ -381,11 +250,11 @@ void Menu_view::Main::handle_frame_timer(unsigned)
 
 		frame_cnt = 0;
 
-		Area const old_size = buffer.is_constructed() ? buffer->size() : Area();
+		Area const old_size = buffer.constructed() ? buffer->size() : Area();
 		Area const size     = root_widget.min_size();
 
-		if (!buffer.is_constructed() || size != old_size)
-			buffer.construct(nitpicker, size);
+		if (!buffer.constructed() || size != old_size)
+			buffer.construct(nitpicker, size, *env()->ram_session());
 		else
 			buffer->reset_surface();
 

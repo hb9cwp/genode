@@ -96,7 +96,6 @@ append config {
 		<parent-provides>
 			<service name="ROM"/>
 			<service name="LOG"/>
-			<service name="CAP"/>
 			<service name="RAM"/>
 			<service name="RM"/>
 			<service name="CPU"/>
@@ -104,7 +103,6 @@ append config {
 			<service name="IRQ"/>
 			<service name="IO_PORT"/>
 			<service name="IO_MEM"/>
-			<service name="SIGNAL"/>
 		</parent-provides>
 		<default-route>
 			<any-service> <parent/> <any-child/> </any-service>
@@ -255,7 +253,9 @@ install_config $config
 # generic modules
 set boot_modules {
 	core init timer ld.lib.so noux terminal ram_fs
-	libc.lib.so libm.lib.so libc_noux.lib.so ncurses.lib.so stdcxx.lib.so }
+	libc.lib.so libm.lib.so libc_noux.lib.so ncurses.lib.so stdcxx.lib.so
+	pcre.lib.so zlib.lib.so readline.lib.so
+}
 
 append boot_modules { gmp.lib.so mpfr.lib.so mpc.lib.so }
 

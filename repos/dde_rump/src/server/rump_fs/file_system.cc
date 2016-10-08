@@ -13,12 +13,11 @@
 
 #include "file_system.h"
 
-#include <base/thread.h>
 #include <os/config.h>
 #include <rump_fs/fs.h>
-#include <timer_session/connection.h>
 #include <util/string.h>
 #include <util/hard_context.h>
+#include <base/log.h>
 
 /**
  * We define our own fs arg structure to fit all sizes, we assume that 'fspec'
@@ -40,7 +39,14 @@ static char const *fs_types[] = { RUMP_MOUNT_CD9660, RUMP_MOUNT_EXT2FS,
                                   RUMP_MOUNT_FFS, RUMP_MOUNT_MSDOS,
                                   RUMP_MOUNT_NTFS, RUMP_MOUNT_UDF, 0 };
 
-static char _fs_type[10];
+typedef Genode::String<16> Fs_type;
+static Fs_type & fs_type()
+{
+	static Fs_type inst = Genode::config()->xml_node().attribute_value("fs", Fs_type());
+
+	return inst;
+}
+
 static bool _supports_symlinks;
 
 static bool _check_type(char const *type)
@@ -54,18 +60,18 @@ static bool _check_type(char const *type)
 
 static void _print_types()
 {
-	PERR("fs types:");
-	for (int i = 0; fs_types[i]; i++)
-		PERR("\t%s", fs_types[i]);
+	Genode::error("fs types:");
+	for (int i = 0; fs_types[i]; ++i)
+		Genode::error("\t", fs_types[i]);
 }
 
 
 static bool check_symlinks()
 {
-	if (!Genode::strcmp(_fs_type, RUMP_MOUNT_EXT2FS))
+	if (!Genode::strcmp(fs_type().string(), RUMP_MOUNT_EXT2FS))
 		return true;
 
-	if (!Genode::strcmp(_fs_type, RUMP_MOUNT_FFS))
+	if (!Genode::strcmp(fs_type().string(), RUMP_MOUNT_FFS))
 		return true;
 
 	return false;
@@ -74,60 +80,21 @@ static bool check_symlinks()
 
 static bool check_read_only()
 {
-	if (!Genode::strcmp(_fs_type, RUMP_MOUNT_CD9660))
+	if (!Genode::strcmp(fs_type().string(), RUMP_MOUNT_CD9660))
 		return true;
 
 	return false;
 }
 
 
-class File_system::Sync : public Genode::Thread<1024 * sizeof(Genode::addr_t)>
+void File_system::init()
 {
-	private:
-
-		Timer::Connection               _timer;
-		Genode::Signal_rpc_member<Sync> _sync_dispatcher;
-
-		void _process_sync(unsigned)
-		{
-			/* sync through front-end */
-			rump_sys_sync();
-			/* sync Genode back-end */
-			rump_io_backend_sync();
-		}
-
-	protected:
-
-		void entry()
-		{
-			while (1) {
-				_timer.msleep(1000);
-				/* send sync request, this goes to server entry point thread  */
-				Genode::Signal_transmitter(_sync_dispatcher).submit();
-			}
-		}
-
-	public:
-
-		Sync(Server::Entrypoint &ep)
-		:
-			Thread("rump_fs_sync"),
-			_sync_dispatcher(ep, *this, &Sync::_process_sync)
-		{
-				start(); 
-		}
-};
-
-
-void File_system::init(Server::Entrypoint &ep)
-{
-	if (!Genode::config()->xml_node().attribute("fs").value(_fs_type, 10) ||
-	    !_check_type(_fs_type)) {
-		PERR("Invalid or no file system given (use \'<config fs=\"<fs type>\"/>)");
+	if (!_check_type(fs_type().string())) {
+		Genode::error("Invalid or no file system given (use \'<config fs=\"<fs type>\"/>)");
 		_print_types();
 		throw Genode::Exception();
 	}
-	PINF("Using %s as file system", _fs_type);
+	Genode::log("Using ", fs_type().string(), " as file system");
 
 	/* start rump kernel */
 	rump_init();
@@ -140,15 +107,13 @@ void File_system::init(Server::Entrypoint &ep)
 	int            opts = check_read_only() ? RUMP_MNT_RDONLY : 0;
 
 	args.fspec =  (char *)GENODE_DEVICE;
-	if (rump_sys_mount(_fs_type, "/", opts, &args, sizeof(args)) == -1) {
-		PERR("Mounting '%s' file system failed (errno %u)", _fs_type, errno);
+	if (rump_sys_mount(fs_type().string(), "/", opts, &args, sizeof(args)) == -1) {
+		Genode::error("Mounting '", fs_type().string(), "' file system failed (errno ", errno, " )");
 		throw Genode::Exception();
 	}
 
 	/* check support for symlinks */
 	_supports_symlinks = check_symlinks();
-
-	new (Genode::env()->heap()) Sync(ep);
 }
 
 

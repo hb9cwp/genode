@@ -16,6 +16,8 @@
 #   INSTALL_DIR      - destination directory for installing shared libraries
 #
 
+ACCUMULATE_MISSING_PORTS = 1
+
 #
 # Include common utility functions
 #
@@ -36,7 +38,7 @@ endif
 append_lib_to_progress_log:
 	@echo "LIBS_READY  += $(LIB)" >> $(LIB_PROGRESS_LOG)
 
-LIB_MK_DIRS = $(foreach REP,$(REPOSITORIES),$(addprefix $(REP)/lib/mk/,$(SPECS)) $(REP)/lib/mk)
+LIB_MK_DIRS = $(foreach REP,$(REPOSITORIES),$(addprefix $(REP)/lib/mk/spec/,$(SPECS)) $(REP)/lib/mk)
 
 #
 # Of all possible file locations, use the (first) one that actually exist.
@@ -132,13 +134,17 @@ ifneq ($(LIBS),)
 	@(echo "$(DEP_VAR_NAME) = $(foreach l,$(LIBS),$l.lib \$$(DEP_$l.lib))"; \
 	  echo "") >> $(LIB_DEP_FILE)
 endif
-	@(echo "$(LIB).lib: $(addsuffix .lib,$(LIBS))"; \
+ifneq ($(DEP_MISSING_PORTS),)
+	@(echo "MISSING_PORTS += $(DEP_MISSING_PORTS)"; \
+	  echo "") >> $(LIB_DEP_FILE)
+endif
+	@(echo "$(LIB).lib: check_ports $(addsuffix .lib,$(LIBS))"; \
 	  echo "	@\$$(MKDIR) -p \$$(LIB_CACHE_DIR)/$(LIB)"; \
 	  echo "	\$$(VERBOSE_MK)\$$(MAKE) $(VERBOSE_DIR) -C \$$(LIB_CACHE_DIR)/$(LIB) -f \$$(BASE_DIR)/mk/lib.mk \\"; \
 	  echo "	     REP_DIR=$(REP_DIR) \\"; \
 	  echo "	     LIB_MK=$(LIB_MK) \\"; \
 	  echo "	     LIB=$(LIB) \\"; \
-	  echo "	     DEPS=\"\$$($(DEP_VAR_NAME))\" \\"; \
+	  echo "	     DEPS=\"\$$(sort \$$($(DEP_VAR_NAME)))\" \\"; \
 	  echo "	     BUILD_BASE_DIR=$(BUILD_BASE_DIR) \\"; \
 	  echo "	     SHELL=$(SHELL) \\"; \
 	  echo "	     SHARED_LIBS=\"\$$(SHARED_LIBS)\"\\"; \

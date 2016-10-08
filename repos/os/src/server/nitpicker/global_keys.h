@@ -16,6 +16,7 @@
 
 /* Genode includes */
 #include <input/keycodes.h>
+#include <util/xml_node.h>
 
 /* local includes */
 #include "session.h"
@@ -24,44 +25,15 @@ class Global_keys
 {
 	private:
 
+		typedef Genode::Xml_node Xml_node;
+
 		struct Policy
 		{
-			enum Type {
+			Session *_session = nullptr;
 
-				/**
-				 * Key is not global but should be propagated to focused client
-				 */
-				UNDEFINED,
+			bool defined() const { return _session != nullptr; }
 
-				/**
-				 * Key activates nitpicker's built-in kill mode
-				 */
-				KILL,
-
-				/**
-				 * Key activates nitpicker's built-in X-ray mode
-				 */
-				XRAY,
-
-				/**
-				 * Key should be propagated to client session
-				 */
-				CLIENT
-			};
-
-			Type     _type;
-			Session *_session;
-
-			Policy() : _type(UNDEFINED), _session(0) { }
-
-			void undefine()         { _type = UNDEFINED; _session = 0; }
-			void operation_kill()   { _type = KILL;      _session = 0; }
-			void operation_xray()   { _type = XRAY;      _session = 0; }
-			void client(Session *s) { _type = CLIENT;    _session = s; }
-
-			bool defined() const { return _type != UNDEFINED; }
-			bool xray()    const { return _type == XRAY; }
-			bool kill()    const { return _type == KILL; }
+			void client(Session *s) { _session = s; }
 		};
 
 		enum { NUM_POLICIES = Input::KEY_MAX + 1 };
@@ -81,16 +53,7 @@ class Global_keys
 		Session *global_receiver(Input::Keycode key) {
 			return _valid(key) ? _policies[key]._session : 0; }
 
-		void apply_config(Session_list &session_list);
-
-		bool is_operation_key(Input::Keycode key) const {
-			return _valid(key) && (_policies[key].xray() || _policies[key].kill()); }
-
-		bool is_xray_key(Input::Keycode key) const {
-			return _valid(key) && _policies[key].xray(); }
-
-		bool is_kill_key(Input::Keycode key) const {
-			return _valid(key) && _policies[key].kill(); }
+		void apply_config(Xml_node config, Session_list &session_list);
 };
 
 #endif /* _GLOBAL_KEYS_H_ */

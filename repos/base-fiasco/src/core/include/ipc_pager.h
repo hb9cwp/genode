@@ -18,9 +18,14 @@
 #include <base/cache.h>
 #include <base/ipc.h>
 #include <base/stdint.h>
-#include <base/native_types.h>
-#include <fiasco/thread_helper.h>
+#include <base/native_capability.h>
 #include <util/touch.h>
+
+/* base-internal includes */
+#include <base/internal/fiasco_thread_helper.h>
+
+/* core includes */
+#include <util.h>
 
 /* Fiasco includes */
 namespace Fiasco {
@@ -85,21 +90,16 @@ namespace Genode {
 	/**
 	 * Special paging server class
 	 */
-	class Ipc_pager : public Native_capability
+	class Ipc_pager
 	{
 		private:
 
-			Native_thread_id _last;           /* origin of last fault message   */
-			addr_t           _pf_addr;        /* page-fault address             */
-			addr_t           _pf_ip;          /* instruction pointer of faulter */
-			Mapping          _reply_mapping;  /* page-fault answer              */
+			Fiasco::l4_threadid_t _last;           /* origin of last fault message   */
+			addr_t                _pf_addr;        /* page-fault address             */
+			addr_t                _pf_ip;          /* instruction pointer of faulter */
+			Mapping               _reply_mapping;  /* page-fault answer              */
 
 		public:
-
-			/**
-			 * Constructor
-			 */
-			Ipc_pager();
 
 			/**
 			 * Wait for a new page fault received as short message IPC
@@ -144,9 +144,13 @@ namespace Genode {
 			void acknowledge_wakeup();
 
 			/**
-			 * Return thread ID of last faulter
+			 * Returns true if the last request was send from a core thread
 			 */
-			Native_thread_id last() const { return _last; }
+			bool request_from_core()
+			{
+				enum { CORE_TASK_ID = 4 };
+				return _last.id.task == CORE_TASK_ID;
+			}
 
 			/**
 			 * Return badge for faulting thread
@@ -157,12 +161,12 @@ namespace Genode {
 			unsigned long badge() const {
 				return convert_native_thread_id_to_badge(_last); }
 
-			bool is_write_fault() const { return (_pf_addr & 2); }
+			bool write_fault() const { return (_pf_addr & 2); }
 
 			/**
 			 * Return true if last fault was an exception
 			 */
-			bool is_exception() const
+			bool exception() const
 			{
 				/*
 				 * Reflection of exceptions is not supported on this platform.

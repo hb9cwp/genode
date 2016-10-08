@@ -13,11 +13,11 @@
  * under the terms of the GNU General Public License version 2.
  */
 
-#ifndef _NOVA_UTIL_H_
-#define _NOVA_UTIL_H_
+#ifndef _CORE__INCLUDE__NOVA_UTIL_H_
+#define _CORE__INCLUDE__NOVA_UTIL_H_
 
 /* Genode includes */
-#include <base/printf.h>
+#include <base/log.h>
 
 /* NOVA includes */
 #include <nova/syscalls.h>
@@ -25,8 +25,6 @@
 /* local includes */
 #include <echo.h>
 #include <util.h>
-
-enum { verbose_local_map = false };
 
 /**
  * Return boot CPU number. It is required if threads in core should be placed
@@ -64,7 +62,8 @@ inline Genode::addr_t boot_cpu()
  * from the echo EC to the calling EC.
  */
 static int map_local(Nova::Utcb *utcb, Nova::Crd src_crd, Nova::Crd dst_crd,
-                     bool kern_pd = false, bool dma_mem = false)
+                     bool kern_pd = false, bool dma_mem = false,
+                     bool write_combined = false)
 {
 	/* open receive window at current EC */
 	utcb->crd_rcv = dst_crd;
@@ -74,17 +73,24 @@ static int map_local(Nova::Utcb *utcb, Nova::Crd src_crd, Nova::Crd dst_crd,
 	utcb->msg[1] = 0;
 	utcb->msg[2] = kern_pd;
 	utcb->msg[3] = dma_mem;
-	utcb->set_msg_word(4);
+	utcb->msg[4] = write_combined;
+	utcb->set_msg_word(5);
 
 	/* establish the mapping via a portal traversal during reply phase */
 	Nova::uint8_t res = Nova::call(echo()->pt_sel());
 	if (res != Nova::NOVA_OK || utcb->msg_words() != 1 || !utcb->msg[0] ||
 	    utcb->msg_items() != 1) {
-		PERR("Failure - map_local 0x%lx:%lu:%u->0x%lx:%lu:%u - call result=%x"
-		     " utcb=%x:%x:%lx !!! utcb=%p kern=%u",
-		     src_crd.addr(), src_crd.order(), src_crd.type(),
-		     dst_crd.addr(), dst_crd.order(), dst_crd.type(), res,
-		     utcb->msg_items(), utcb->msg_words(), utcb->msg[0], utcb, kern_pd);
+
+		typedef Genode::Hex Hex;
+		error("map_local failed ",
+		      Hex(src_crd.addr()), ":", Hex(src_crd.order()), ":", Hex(src_crd.type()), "->",
+		      Hex(dst_crd.addr()), ":", Hex(dst_crd.order()), ":", Hex(dst_crd.type()), " - ",
+		      "result=", Hex(res), " "
+		      "msg=",    Hex(utcb->msg_items()), ":",
+		                 Hex(utcb->msg_words()), ":",
+		                 Hex(utcb->msg[0]), " !!! "
+		      "utcb=",   utcb, " "
+		      "kern=",   kern_pd);
 		return res > 0 ? res : -1;
 	}
 	/* clear receive window */
@@ -131,12 +137,9 @@ inline int map_local(Nova::Utcb *utcb,
                      Genode::addr_t from_start, Genode::addr_t to_start,
                      Genode::size_t num_pages,
                      Nova::Rights const &permission,
-                     bool kern_pd = false, bool dma_mem = false)
+                     bool kern_pd = false, bool dma_mem = false,
+                     bool write_combined = false)
 {
-	if (verbose_local_map)
-		Genode::printf("::map_local: from %lx to %lx, %zd pages from kernel %u\n",
-		               from_start, to_start, num_pages, kern_pd);
-
 	using namespace Nova;
 	using namespace Genode;
 
@@ -166,14 +169,10 @@ inline int map_local(Nova::Utcb *utcb,
 		if ((to_end - to_curr) < (1UL << order))
 			order = log2(to_end - to_curr);
 
-		if (verbose_local_map)
-			Genode::printf("::map_local: order %zx %lx:%lx %lx:%lx\n",
-			               order, from_curr, from_end, to_curr, to_end);
-
 		int const res = map_local(utcb,
 		                          Mem_crd((from_curr >> 12), order - get_page_size_log2(), permission),
 		                          Mem_crd((to_curr   >> 12), order - get_page_size_log2(), permission),
-		                          kern_pd, dma_mem);
+		                          kern_pd, dma_mem, write_combined);
 		if (res) return res;
 
 		/* advance offset by current flexpage size */
@@ -204,12 +203,9 @@ inline void unmap_local(Nova::Utcb *utcb, Genode::addr_t start,
 	Genode::addr_t base = start >> get_page_size_log2();
 
 	if (start & (get_page_size() - 1)) {
-		PERR("unmap failed - unaligned address specified");
+		error("unmap failed - unaligned address specified");
 		return;
 	}
-
-	if (verbose_local_map)
-		PINF("Unmapping local: range 0x%lx+0x%zx", base, num_pages);
 
 	while (num_pages) {
 		unsigned char const base_bit  = lsb_bit(base);
@@ -217,10 +213,6 @@ inline void unmap_local(Nova::Utcb *utcb, Genode::addr_t start,
 		unsigned char const order     = min(order_bit, base_bit);
 
 		Mem_crd const crd(base, order, rwx);
-
-		if (verbose_local_map)
-			PINF("Unmapping local:       0x%lx+0x%lx", crd.base(),
-			     1UL << crd.order());
 
 		unmap_local(crd, self);
 
@@ -230,4 +222,4 @@ inline void unmap_local(Nova::Utcb *utcb, Genode::addr_t start,
 }
 
 
-#endif /* _NOVA_UTIL_H_ */
+#endif /* _CORE__INCLUDE__NOVA_UTIL_H_ */

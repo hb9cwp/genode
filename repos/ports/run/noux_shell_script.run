@@ -39,7 +39,6 @@ append config {
 		<parent-provides>
 			<service name="ROM"/>
 			<service name="LOG"/>
-			<service name="CAP"/>
 			<service name="RAM"/>
 			<service name="RM"/>
 			<service name="CPU"/>
@@ -47,10 +46,9 @@ append config {
 			<service name="IRQ"/>
 			<service name="IO_PORT"/>
 			<service name="IO_MEM"/>
-			<service name="SIGNAL"/>
 		</parent-provides>
 		<default-route>
-			<any-service> <any-child/> <parent/> </any-service>
+			<any-service> <parent/> <any-child/> </any-service>
 		</default-route>
 		<start name="timer">
 			<resource name="RAM" quantum="1M"/>
@@ -136,7 +134,7 @@ foreach pkg $noux_pkgs {
 
 append config {
 				<dir name="home"> <fs label="home" /> </dir>
-				<dir name="ram"> <fs label="root" /> </dir>
+				<dir name="ram">  <fs label="root" /> </dir>
 
 			</fstab>
 			<start name="/bin/bash">

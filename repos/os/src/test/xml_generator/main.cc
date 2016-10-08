@@ -13,6 +13,7 @@
 
 #include <base/printf.h>
 #include <util/xml_generator.h>
+#include <util/xml_node.h>
 
 using Genode::size_t;
 
@@ -38,7 +39,23 @@ static size_t fill_buffer_with_xml(char *dst, size_t dst_len)
 				xml.node("sub_sub_label");
 			});
 		});
-		xml.attribute("verbose", "true");
+		xml.node("bool", [&] ()
+		{
+			xml.attribute("true",  true);
+			xml.attribute("false", false);
+		});
+		xml.node("signed", [&] ()
+		{
+			xml.attribute("int",      -1);
+			xml.attribute("long",     -2L);
+			xml.attribute("longlong", -3LL);
+		});
+		xml.node("unsigned", [&] ()
+		{
+			xml.attribute("int",      1U);
+			xml.attribute("long",     2UL);
+			xml.attribute("longlong", 3ULL);
+		});
 	});
 
 	return xml.used();
@@ -67,6 +84,37 @@ int main(int argc, char **argv)
 		fill_buffer_with_xml(dst, 20); }
 	catch (Genode::Xml_generator::Buffer_exceeded) {
 		printf("buffer exceeded (expected error)\n"); }
+
+	/*
+	 * Test the sanitizing of XML node content
+	 */
+	{
+		/* generate pattern that contains all possible byte values */
+		char pattern[256];
+		for (unsigned i = 0; i < sizeof(pattern); i++)
+			pattern[i] = i;
+
+		/* generate XML with the pattern as content */
+		Genode::Xml_generator xml(dst, sizeof(dst), "data", [&] () {
+			xml.append_sanitized(pattern, sizeof(pattern)); });
+
+		/* parse the generated XML data */
+		Genode::Xml_node node(dst);
+
+		/* obtain decoded node content */
+		char decoded[sizeof(dst)];
+		size_t const decoded_len = node.decoded_content(decoded, sizeof(decoded));
+
+		/* compare result with original pattern */
+		if (decoded_len != sizeof(pattern)) {
+			printf("decoded content has unexpected length %zd\n", decoded_len);
+			return 1;
+		}
+		if (Genode::memcmp(decoded, pattern, sizeof(pattern))) {
+			printf("decoded content does not match original pattern\n");
+			return 1;
+		}
+	}
 
 	printf("--- XML generator test finished ---\n");
 

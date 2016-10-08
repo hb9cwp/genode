@@ -14,26 +14,198 @@
 #ifndef _ATA_DRIVER_H_
 #define _ATA_DRIVER_H_
 
+#include <base/log.h>
 #include "ahci.h"
 
 using namespace Genode;
 
+
+/**
+ * Return data of 'identify_device' ATA command
+ */
+struct Identity : Genode::Mmio
+{
+	Identity(Genode::addr_t base) : Mmio(base) { }
+
+	struct Serial_number : Register_array<0x14, 8, 20, 8> { };
+	struct Model_number : Register_array<0x36, 8, 40, 8> { };
+
+	struct Queue_depth : Register<0x96, 16>
+	{
+		struct Max_depth : Bitfield<0, 5> { };
+	};
+
+	struct Sata_caps   : Register<0x98, 16>
+	{
+		struct Ncq_support : Bitfield<8, 1> { };
+	};
+
+	struct Sector_count : Register<0xc8, 64> { };
+
+	struct Logical_block  : Register<0xd4, 16>
+	{
+		struct Per_physical : Bitfield<0,  3> { }; /* 2^X logical per physical */
+		struct Longer_512   : Bitfield<12, 1> { };
+		struct Multiple     : Bitfield<13, 1> { }; /* multiple logical blocks per physical */
+	};
+
+	struct Logical_words : Register<0xea, 32> { }; /* words (16 bit) per logical block */
+
+	struct Alignment : Register<0x1a2, 16>
+	{
+		struct Logical_offset : Bitfield<0, 14> { }; /* offset first logical block in physical */
+	};
+
+	void info()
+	{
+		using Genode::log;
+
+		log("  queue depth: ", read<Queue_depth::Max_depth>() + 1, " "
+		    "ncq: ", read<Sata_caps::Ncq_support>());
+		log("  numer of sectors: ", read<Sector_count>());
+		log("  multiple logical blocks per physical: ",
+		    read<Logical_block::Multiple>() ? "yes" : "no");
+		log("  logical blocks per physical: ",
+		    1U << read<Logical_block::Per_physical>());
+		log("  logical block size is above 512 byte: ",
+		    read<Logical_block::Longer_512>() ? "yes" : "no");
+		log("  words (16bit) per logical block: ",
+		    read<Logical_words>());
+		log("  offset of first logical block within physical: ",
+		    read<Alignment::Logical_offset>());
+	}
+};
+
+
+/**
+ * 16-bit word big endian device ASCII characters
+ */
+template <typename DEVICE_STRING>
+struct String
+{
+	char buf[DEVICE_STRING::ITEMS + 1];
+
+	String(Identity & info)
+	{
+		long j = 0;
+		for (unsigned long i = 0; i < DEVICE_STRING::ITEMS; i++) {
+			/* read and swap even and uneven characters */
+			char c = (char)info.read<DEVICE_STRING>(i ^ 1);
+			if (Genode::is_whitespace(c) && j == 0)
+				continue;
+			buf[j++] = c;
+		}
+
+		buf[j] = 0;
+
+		/* remove trailing white spaces */
+		while ((j > 0) && (buf[--j] == ' '))
+			buf[j] = 0;
+	}
+
+	bool operator == (char const *other) const
+	{
+		return strcmp(buf, other) == 0;
+	}
+
+	void print(Genode::Output &out) const { Genode::print(out, (char const *)buf); }
+};
+
+
+/**
+ * Commands to distinguish between ncq and non-ncq operation
+ */
+struct Io_command
+{
+	virtual void command(Port           &por,
+	                     Command_table  &table,
+	                     bool            read,
+	                     Block::sector_t block_number,
+	                     size_t          count,
+	                     unsigned        slot) = 0;
+
+	virtual void handle_irq(Port &port, Port::Is::access_t status) = 0;
+};
+
+struct Ncq_command : Io_command
+{
+	void command(Port           &port,
+	             Command_table  &table,
+	             bool            read,
+	             Block::sector_t block_number,
+	             size_t          count,
+	             unsigned        slot) override
+	{
+		table.fis.fpdma(read, block_number, count, slot);
+		/* set pending */
+		port.write<Port::Sact>(1U << slot);
+	}
+
+	void handle_irq(Port &port, Port::Is::access_t status) override
+	{
+		/*
+		 * Check for completions of other requests immediately
+		 */
+		while (Port::Is::Sdbs::get(status = port.read<Port::Is>()))
+			port.ack_irq();
+	}
+};
+
+struct Dma_ext_command : Io_command
+{
+	void command(Port           &port,
+	             Command_table  &table,
+	             bool            read,
+	             Block::sector_t block_number,
+	             size_t          count,
+	             unsigned     /* slot */) override
+	{
+		table.fis.dma_ext(read, block_number, count);
+	}
+
+	void handle_irq(Port &port, Port::Is::access_t status) override
+	{
+		if (Port::Is::Dma_ext_irq::get(status))
+			port.ack_irq();
+	}
+};
+
+
+/**
+ * Drivers using ncq- and non-ncq commands
+ */
 struct Ata_driver : Port_driver
 {
-	Genode::Lazy_volatile_object<Identity> info;
-	Block::Packet_descriptor               pending[32];
+	Genode::Allocator &alloc;
 
-	Ata_driver(Port &port, Signal_context_capability state_change)
-	: Port_driver(port, state_change)
+	typedef ::String<Identity::Serial_number> Serial_string;
+	typedef ::String<Identity::Model_number>  Model_string;
+
+	Genode::Lazy_volatile_object<Identity>      info;
+	Genode::Lazy_volatile_object<Serial_string> serial;
+	Genode::Lazy_volatile_object<Model_string>  model;
+
+	Io_command                               *io_cmd = nullptr;
+	Block::Packet_descriptor                  pending[32];
+
+	Ata_driver(Genode::Allocator &alloc,
+	           Port &port, Ahci_root &root, unsigned &sem)
+	: Port_driver(port, root, sem), alloc(alloc)
 	{
 		Port::init();
 		identify_device();
 	}
 
+	~Ata_driver()
+	{
+		if (io_cmd)
+			destroy(&alloc, io_cmd);
+	}
+
 	unsigned find_free_cmd_slot()
 	{
 		for (unsigned slot = 0; slot < cmd_slots; slot++)
-			if (!pending[slot].valid())
+			if (!pending[slot].size())
 				return slot;
 
 		throw Block::Driver::Request_congestion();
@@ -44,7 +216,7 @@ struct Ata_driver : Port_driver
 		unsigned slots =  Port::read<Ci>() | Port::read<Sact>();
 
 		for (unsigned slot = 0; slot < cmd_slots; slot++) {
-			if ((slots & (1U << slot)) || !pending[slot].valid())
+			if ((slots & (1U << slot)) || !pending[slot].size())
 				continue;
 
 			Block::Packet_descriptor p = pending[slot];
@@ -59,7 +231,7 @@ struct Ata_driver : Port_driver
 		Block::sector_t end = block_number + count - 1;
 
 		for (unsigned slot = 0; slot < cmd_slots; slot++) {
-			if (!pending[slot].valid())
+			if (!pending[slot].size())
 				continue;
 
 			Block::sector_t pending_start = pending[slot].block_number();
@@ -69,8 +241,11 @@ struct Ata_driver : Port_driver
 			    (end          >= pending_start && end          <= pending_end) ||
 			    (pending_start >= block_number && pending_start <= end) ||
 			    (pending_end   >= block_number && pending_end   <= end)) {
-				PWRN("Overlap: pending %llu + %zu, request: %llu + %zu", pending[slot].block_number(),
-				     pending[slot].block_count(), block_number, count);
+
+				Genode::warning("overlap: "
+				                "pending ", pending[slot].block_number(),
+				                " + ", pending[slot].block_count(), ", "
+				                "request: ", block_number, " + ", count);
 				throw Block::Driver::Request_congestion();
 			}
 		}
@@ -90,15 +265,15 @@ struct Ata_driver : Port_driver
 
 		/* setup fis */
 		Command_table table(command_table_addr(slot), phys, count * block_size());
-		table.fis.fpdma(read, block_number, count, slot);
+
+		/* set ATA command */
+		io_cmd->command(*this, table, read, block_number, count, slot);
 
 		/* set or clear write flag in command header */
 		Command_header header(command_header_addr(slot));
 		header.write<Command_header::Bits::W>(read ? 0 : 1);
 		header.clear_byte_count();
 
-		/* set pending */
-		Port::write<Sact>(1U << slot);
 		execute(slot);
 	}
 
@@ -111,42 +286,59 @@ struct Ata_driver : Port_driver
 	{
 		Is::access_t status = Port::read<Is>();
 
-		if (verbose)
-			PDBG("irq: %x state: %u", status, state);
+		switch (state) {
 
-		if ((Port::Is::Dss::get(status) || Port::Is::Pss::get(status)) &&
-		    state == IDENTIFY) {
-			info.construct(device_info);
-			if (verbose)
-				info->info();
+		case IDENTIFY:
 
-			check_device();
-		}
+			if (Port::Is::Dss::get(status)
+			    || Port::Is::Pss::get(status)
+			    || Port::Is::Dhrs::get(status)) {
+				info.construct(device_info);
+				serial.construct(*info);
+				model.construct(*info);
 
-		/*
-		 * When packets get acked, new ones may be inserted by the block driver
-		 * layer, these new packet requests might be finished during 'ack_packets',
-		 * so clear the IRQ and re-read after 'ack_packets'
-		 */
-		while (Is::Sdbs::get(status = Port::read<Is>())) {
-			ack_irq();
+				if (verbose) {
+					Genode::log("  model number: ",  Genode::Cstring(model->buf));
+					Genode::log("  serial number: ", Genode::Cstring(serial->buf));
+					info->info();
+				}
+
+				check_device();
+				if (ncq_support())
+					io_cmd = new (&alloc) Ncq_command();
+				else
+					io_cmd = new (&alloc) Dma_ext_command();
+
+				ack_irq();
+			}
+			break;
+
+		case READY:
+
+			io_cmd->handle_irq(*this, status);
 			ack_packets();
+
+		default:
+			break;
 		}
 
 		stop();
 	}
 
+	bool ncq_support()
+	{
+		return info->read<Identity::Sata_caps::Ncq_support>() && hba.ncq();
+	}
+
 	void check_device()
 	{
-		if (!info->read<Identity::Sata_caps::Ncq_support>() ||
-		    !hba.ncg()) {
-			PERR("Device does not support native command queuing: abort");
-			state_change();
-			return;
-		}
-
 		cmd_slots = min((int)cmd_slots,
 		                info->read<Identity::Queue_depth::Max_depth >() + 1);
+
+		/* no native command queueing */
+		if (!ncq_support())
+			cmd_slots = 1;
+
 		state = READY;
 		state_change();
 	}

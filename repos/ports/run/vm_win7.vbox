@@ -21,7 +21,7 @@
       <ExtraDataItem name="GUI/LastNormalWindowPosition" value="513,100,1024,790"/>
     </ExtraData>
     <Hardware version="2">
-      <CPU count="1" hotplug="false">
+      <CPU count="2" hotplug="false">
         <HardwareVirtEx enabled="true"/>
         <HardwareVirtExNestedPaging enabled="true"/>
         <HardwareVirtExVPID enabled="true"/>
@@ -46,7 +46,7 @@
       <RemoteDisplay enabled="false" authType="Null"/>
       <BIOS>
         <ACPI enabled="true"/>
-        <IOAPIC enabled="false"/>
+        <IOAPIC enabled="true"/>
         <Logo fadeIn="true" fadeOut="true" displayTime="0"/>
         <BootMenu mode="MessageAndMenu"/>
         <TimeOffset value="0"/>
@@ -91,7 +91,7 @@
       <GuestProperties/>
     </Hardware>
     <StorageControllers>
-      <StorageController name="IDE" type="PIIX4" PortCount="2" useHostIOCache="true" Bootable="true">
+      <StorageController name="SATA" type="AHCI" PortCount="2" useHostIOCache="true" Bootable="true">
         <AttachedDevice type="HardDisk" port="0" device="0">
           <Image uuid="{4c5ed34f-f6cf-48e8-808d-2c06f0d11464}"/>
         </AttachedDevice>

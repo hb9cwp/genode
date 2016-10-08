@@ -13,13 +13,11 @@
  */
 
 /* Genode includes */
-#include <base/printf.h>
 #include <base/env.h>
 #include <os/path.h>
 #include <util/token.h>
 
 /* Genode-specific libc interfaces */
-#include <libc-plugin/fd_alloc.h>
 #include <libc-plugin/plugin_registry.h>
 #include <libc-plugin/plugin.h>
 
@@ -33,22 +31,11 @@
 #include <unistd.h>
 
 /* libc-internal includes */
+#include "libc_file.h"
 #include "libc_mem_alloc.h"
 #include "libc_mmap_registry.h"
 
 using namespace Libc;
-
-
-#ifdef GENODE_RELEASE
-#undef PERR
-#define PERR(...)
-#endif /* GENODE_RELEASE */
-
-static bool const verbose = false;
-#define PDBGV(...) if (verbose) PDBG(__VA_ARGS__)
-
-
-enum { INVALID_FD = -1 };
 
 
 Libc::Mmap_registry *Libc::mmap_registry()
@@ -61,54 +48,6 @@ Libc::Mmap_registry *Libc::mmap_registry()
 /***************
  ** Utilities **
  ***************/
-
-/**
- * Find plugin responsible for the specified libc file descriptor
- *
- * \param func_name  function name of the caller for printing an error message
- */
-inline File_descriptor *libc_fd_to_fd(int libc_fd, const char *func_name)
-{
-	File_descriptor *fd = file_descriptor_allocator()->find_by_libc_fd(libc_fd);
-	if (!fd)
-		PERR("no plugin found for %s(%d)", func_name, libc_fd);
-	return fd;
-}
-
-
-/**
- * Generate body of wrapper function taking a file descriptor as first argument
- */
-#define FD_FUNC_WRAPPER_GENERIC(result_stm, result_err_val, func_name, libc_fd, ...)	\
-{																		\
-	File_descriptor *fd = libc_fd_to_fd(libc_fd, #func_name);			\
-	if (!fd || !fd->plugin) {											\
-		errno = EBADF;													\
-		result_stm result_err_val;											\
-	} else																\
-		result_stm fd->plugin->func_name(fd, ##__VA_ARGS__ ); 			\
-}
-
-#define FD_FUNC_WRAPPER(func_name, libc_fd, ...) \
-	FD_FUNC_WRAPPER_GENERIC(return, INVALID_FD, func_name, libc_fd, ##__VA_ARGS__ )
-
-/**
- * Generate body of wrapper function taking a path name as first argument
- */
-#define FNAME_FUNC_WRAPPER_GENERIC(result_stm, func_name, path, ...)						\
-{																							\
-	Plugin *plugin  = plugin_registry()->get_plugin_for_##func_name(path, ##__VA_ARGS__);	\
-	if (!plugin) {																			\
-		PERR("no plugin found for %s(\"%s\")", #func_name, path);							\
-		errno = ENOSYS;																		\
-		result_stm -1;																		\
-	} else																					\
-		result_stm plugin->func_name(path, ##__VA_ARGS__);									\
-}
-
-#define FNAME_FUNC_WRAPPER(func_name, path, ...) \
-	FNAME_FUNC_WRAPPER_GENERIC(return, func_name, path, ##__VA_ARGS__ )
-
 
 /**
  * Current working directory
@@ -143,27 +82,22 @@ class Symlink_resolve_error { };
 
 static void resolve_symlinks(char const *path, Absolute_path &resolved_path)
 {
-	PDBGV("path = %s", path);
-
 	char path_element[PATH_MAX];
 	char symlink_target[PATH_MAX];
 
 	Absolute_path current_iteration_working_path;
 	Absolute_path next_iteration_working_path(path, cwd().base());
-	PDBGV("absolute_path = %s", next_iteration_working_path.base());
 
 	enum { FOLLOW_LIMIT = 10 };
 	int follow_count = 0;
 	bool symlink_resolved_in_this_iteration;
 	do {
-		PDBGV("new iteration");
 		if (follow_count++ == FOLLOW_LIMIT) {
 			errno = ELOOP;
 			throw Symlink_resolve_error();
 		}
 
-		current_iteration_working_path.import(next_iteration_working_path.base());
-		PDBGV("current_iteration_working_path = %s", current_iteration_working_path.base());
+		current_iteration_working_path = next_iteration_working_path;
 
 		next_iteration_working_path.import("");
 		symlink_resolved_in_this_iteration = false;
@@ -177,17 +111,13 @@ static void resolve_symlinks(char const *path, Absolute_path &resolved_path)
 			}
 
 			t.string(path_element, sizeof(path_element));
-			PDBGV("path_element = %s", path_element);
 
 			try {
-				next_iteration_working_path.append("/");
-				next_iteration_working_path.append(path_element);
+				next_iteration_working_path.append_element(path_element);
 			} catch (Genode::Path_base::Path_too_long) {
 				errno = ENAMETOOLONG;
 				throw Symlink_resolve_error();
 			}
-
-			PDBGV("working_path_new = %s", next_iteration_working_path.base());
 
 			/*
 			 * If a symlink has been resolved in this iteration, the remaining
@@ -198,11 +128,9 @@ static void resolve_symlinks(char const *path, Absolute_path &resolved_path)
 				int res;
 				FNAME_FUNC_WRAPPER_GENERIC(res = , stat, next_iteration_working_path.base(), &stat_buf);
 				if (res == -1) {
-					PDBGV("stat() failed for %s", next_iteration_working_path.base());
 					throw Symlink_resolve_error();
 				}
 				if (S_ISLNK(stat_buf.st_mode)) {
-					PDBGV("found symlink: %s", next_iteration_working_path.base());
 					FNAME_FUNC_WRAPPER_GENERIC(res = , readlink,
 					                           next_iteration_working_path.base(),
 					                           symlink_target, sizeof(symlink_target) - 1);
@@ -219,32 +147,28 @@ static void resolve_symlinks(char const *path, Absolute_path &resolved_path)
 						/* relative target */
 						next_iteration_working_path.strip_last_element();
 						try {
-							next_iteration_working_path.append(symlink_target);
+							next_iteration_working_path.append_element(symlink_target);
 						} catch (Genode::Path_base::Path_too_long) {
 							errno = ENAMETOOLONG;
 							throw Symlink_resolve_error();
 						}
 					}
-					PDBGV("resolved symlink to: %s", next_iteration_working_path.base());
 					symlink_resolved_in_this_iteration = true;
 				}
 			}
 
 			t = t.next();
 		}
-		PDBGV("token end");
 
 	} while (symlink_resolved_in_this_iteration);
 
-	resolved_path.import(next_iteration_working_path.base());
-	PDBGV("resolved_path = %s", resolved_path.base());
+	resolved_path = next_iteration_working_path;
+	resolved_path.remove_trailing('/');
 }
 
 
 static void resolve_symlinks_except_last_element(char const *path, Absolute_path &resolved_path)
 {
-	PDBGV("path = %s", path);
-
 	Absolute_path absolute_path_without_last_element(path, cwd().base());
 	absolute_path_without_last_element.strip_last_element();
 
@@ -254,7 +178,7 @@ static void resolve_symlinks_except_last_element(char const *path, Absolute_path
 	Absolute_path absolute_path_last_element(path, cwd().base());
 	absolute_path_last_element.keep_only_last_element();
 	try {
-		resolved_path.append(absolute_path_last_element.base());
+		resolved_path.append_element(absolute_path_last_element.base());
 	} catch (Genode::Path_base::Path_too_long) {
 		errno = ENAMETOOLONG;
 		throw Symlink_resolve_error();
@@ -266,30 +190,17 @@ static void resolve_symlinks_except_last_element(char const *path, Absolute_path
  ** Libc functions **
  ********************/
 
-extern "C" int _accept(int libc_fd, struct sockaddr *addr, socklen_t *addrlen)
+extern "C" int access(const char *path, int amode)
 {
-	return accept(libc_fd, addr, addrlen);
+	try {
+		Absolute_path resolved_path;
+		resolve_symlinks(path, resolved_path);
+		FNAME_FUNC_WRAPPER(access, resolved_path.base(), amode);
+	} catch (Symlink_resolve_error) {
+		errno = ENOENT;
+		return -1;
+	}
 }
-
-
-extern "C" int accept(int libc_fd, struct sockaddr *addr, socklen_t *addrlen)
-{
-	File_descriptor *ret_fd;
-	FD_FUNC_WRAPPER_GENERIC(ret_fd =, 0, accept, libc_fd, addr, addrlen);
-	return ret_fd ? ret_fd->libc_fd : INVALID_FD;
-}
-
-
-extern "C" int _bind(int libc_fd, const struct sockaddr *addr,
-                     socklen_t addrlen)
-{
-	return bind(libc_fd, addr, addrlen);
-}
-
-
-extern "C" int bind(int libc_fd, const struct sockaddr *addr,
-                    socklen_t addrlen) {
-	FD_FUNC_WRAPPER(bind, libc_fd, addr, addrlen); }
 
 
 extern "C" int chdir(const char *path)
@@ -310,18 +221,6 @@ extern "C" int _close(int libc_fd) {
 
 
 extern "C" int close(int libc_fd) { return _close(libc_fd); }
-
-
-extern "C" int connect(int libc_fd, const struct sockaddr *addr,
-                       socklen_t addrlen) {
-	FD_FUNC_WRAPPER(connect, libc_fd, addr, addrlen); }
-
-
-extern "C" int _connect(int libc_fd, const struct sockaddr *addr,
-                        socklen_t addrlen)
-{
-    return connect(libc_fd, addr, addrlen);
-}
 
 
 extern "C" int _dup(int libc_fd)
@@ -418,21 +317,6 @@ extern "C" int _fcntl(int libc_fd, int cmd, long arg) {
 	return fcntl(libc_fd, cmd, arg); }
 
 
-extern "C" void freeaddrinfo(struct addrinfo *res)
-{
-	Plugin *plugin;
-
-	plugin = plugin_registry()->get_plugin_for_freeaddrinfo(res);
-
-	if (!plugin) {
-		PERR("no plugin found for freeaddrinfo()");
-		return;
-	}
-
-	plugin->freeaddrinfo(res);
-}
-
-
 extern "C" int _fstat(int libc_fd, struct stat *buf) {
 	FD_FUNC_WRAPPER(fstat, libc_fd, buf); }
 
@@ -440,6 +324,35 @@ extern "C" int _fstat(int libc_fd, struct stat *buf) {
 extern "C" int fstat(int libc_fd, struct stat *buf)
 {
 	return _fstat(libc_fd, buf);
+}
+
+
+extern "C" int fstatat(int libc_fd, char const *path, struct stat *buf, int flags)
+{
+	if (*path == '/') {
+		if (flags & AT_SYMLINK_NOFOLLOW)
+			return lstat(path, buf);
+		return stat(path, buf);
+	}
+
+	Libc::Absolute_path abs_path;
+
+	if (libc_fd == AT_FDCWD) {
+		abs_path = cwd();
+		abs_path.append_element(path);
+	} else {
+		Libc::File_descriptor *fd =
+			Libc::file_descriptor_allocator()->find_by_libc_fd(libc_fd);
+		if (!fd) {
+			errno = EBADF;
+			return -1;
+		}
+		abs_path.import(path, fd->fd_path);
+	}
+
+	return (flags & AT_SYMLINK_NOFOLLOW)
+		? lstat(abs_path.base(), buf)
+		:  stat(abs_path.base(), buf);
 }
 
 
@@ -455,46 +368,9 @@ extern "C" int ftruncate(int libc_fd, ::off_t length) {
 	FD_FUNC_WRAPPER(ftruncate, libc_fd, length); }
 
 
-extern "C" int getaddrinfo(const char *node, const char *service,
-                           const struct addrinfo *hints,
-                           struct addrinfo **res)
-{
-	Plugin *plugin;
-
-	plugin = plugin_registry()->get_plugin_for_getaddrinfo(node, service, hints, res);
-
-	if (!plugin) {
-		PERR("no plugin found for getaddrinfo()");
-		return -1;
-	}
-
-	return plugin->getaddrinfo(node, service, hints, res);
-}
-
-
 extern "C" ssize_t _getdirentries(int libc_fd, char *buf, ::size_t nbytes, ::off_t *basep) {
 	FD_FUNC_WRAPPER(getdirentries, libc_fd, buf, nbytes, basep); }
 
-
-
-extern "C" int _getpeername(int libc_fd, struct sockaddr *addr, socklen_t *addrlen) {
-	FD_FUNC_WRAPPER(getpeername, libc_fd, addr, addrlen); }
-
-
-extern "C" int getpeername(int libc_fd, struct sockaddr *addr, socklen_t *addrlen)
-{
-	return _getpeername(libc_fd, addr, addrlen);
-}
-
-
-extern "C" int _getsockname(int libc_fd, struct sockaddr *addr, socklen_t *addrlen) {
-	FD_FUNC_WRAPPER(getsockname, libc_fd, addr, addrlen); }
-
-
-extern "C" int getsockname(int libc_fd, struct sockaddr *addr, socklen_t *addrlen)
-{
-	return _getsockname(libc_fd, addr, addrlen);
-}
 
 
 extern "C" int ioctl(int libc_fd, int request, char *argp) {
@@ -503,16 +379,6 @@ extern "C" int ioctl(int libc_fd, int request, char *argp) {
 
 extern "C" int _ioctl(int libc_fd, int request, char *argp) {
 	FD_FUNC_WRAPPER(ioctl, libc_fd, request, argp); }
-
-
-extern "C" int _listen(int libc_fd, int backlog)
-{
-	return listen(libc_fd, backlog);
-}
-
-
-extern "C" int listen(int libc_fd, int backlog) {
-	FD_FUNC_WRAPPER(listen, libc_fd, backlog); }
 
 
 extern "C" ::off_t lseek(int libc_fd, ::off_t offset, int whence) {
@@ -557,7 +423,7 @@ extern "C" void *mmap(void *addr, ::size_t length, int prot, int flags,
 	/* lookup plugin responsible for file descriptor */
 	File_descriptor *fd = libc_fd_to_fd(libc_fd, "mmap");
 	if (!fd || !fd->plugin || !fd->plugin->supports_mmap()) {
-		PWRN("mmap not supported for file descriptor %d", libc_fd);
+		Genode::warning("mmap not supported for file descriptor ", libc_fd);
 		errno = EBADF;
 		return (void *)INVALID_FD;
 	}
@@ -570,8 +436,8 @@ extern "C" void *mmap(void *addr, ::size_t length, int prot, int flags,
 
 extern "C" int munmap(void *start, ::size_t length)
 {
-	if (!mmap_registry()->is_registered(start)) {
-		PWRN("munmap: could not lookup plugin for address %p", start);
+	if (!mmap_registry()->registered(start)) {
+		Genode::warning("munmap: could not lookup plugin for address ", start);
 		errno = EINVAL;
 		return -1;
 	}
@@ -596,8 +462,6 @@ extern "C" int munmap(void *start, ::size_t length)
 
 extern "C" int _open(const char *pathname, int flags, ::mode_t mode)
 {
-	PDBGV("pathname = %s", pathname);
-
 	Absolute_path resolved_path;
 
 	Plugin *plugin;
@@ -622,18 +486,16 @@ extern "C" int _open(const char *pathname, int flags, ::mode_t mode)
 		}
 	}
 
-	PDBGV("resolved path = %s", resolved_path.base());
-
 	plugin = plugin_registry()->get_plugin_for_open(resolved_path.base(), flags);
 
 	if (!plugin) {
-		PERR("no plugin found for open(\"%s\", %d)", pathname, flags);
+		Genode::error("no plugin found for open(\"", pathname, "\", ", flags, ")");
 		return -1;
 	}
 
 	new_fdo = plugin->open(resolved_path.base(), flags);
 	if (!new_fdo) {
-		PERR("plugin()->open(\"%s\") failed", pathname);
+		Genode::error("plugin()->open(\"", pathname, "\") failed");
 		return -1;
 	}
 	new_fdo->path(resolved_path.base());
@@ -660,12 +522,12 @@ extern "C" int pipe(int pipefd[2])
 	plugin = plugin_registry()->get_plugin_for_pipe();
 
 	if (!plugin) {
-		PERR("no plugin found for pipe()");
+		Genode::error("no plugin found for pipe()");
 		return -1;
 	}
 
 	if (plugin->pipe(pipefdo) == -1) {
-		PERR("plugin()->pipe() failed");
+		Genode::error("plugin()->pipe() failed");
 		return -1;
 	}
 
@@ -698,26 +560,6 @@ extern "C" ssize_t readlink(const char *path, char *buf, size_t bufsiz)
 }
 
 
-extern "C" ssize_t recv(int libc_fd, void *buf, ::size_t len, int flags) {
-	FD_FUNC_WRAPPER(recv, libc_fd, buf, len, flags); }
-
-
-extern "C" ssize_t _recvfrom(int libc_fd, void *buf, ::size_t len, int flags,
-                              struct sockaddr *src_addr, socklen_t *addrlen) {
-	FD_FUNC_WRAPPER(recvfrom, libc_fd, buf, len, flags, src_addr, addrlen); }
-
-
-extern "C" ssize_t recvfrom(int libc_fd, void *buf, ::size_t len, int flags,
-                              struct sockaddr *src_addr, socklen_t *addrlen)
-{
-	return _recvfrom(libc_fd, buf, len, flags, src_addr, addrlen);
-}
-
-
-extern "C" ssize_t recvmsg(int libc_fd, struct msghdr *msg, int flags) {
-	FD_FUNC_WRAPPER(recvmsg, libc_fd, msg, flags); }
-
-
 extern "C" int rename(const char *oldpath, const char *newpath)
 {
 	try {
@@ -743,80 +585,8 @@ extern "C" int rmdir(const char *path)
 }
 
 
-extern "C" ssize_t send(int libc_fd, const void *buf, ::size_t len, int flags) {
-	FD_FUNC_WRAPPER(send, libc_fd, buf, len, flags); }
-
-
-extern "C" ssize_t _sendto(int libc_fd, const void *buf, ::size_t len, int flags,
-                            const struct sockaddr *dest_addr, socklen_t addrlen) {
-	FD_FUNC_WRAPPER(sendto, libc_fd, buf, len, flags, dest_addr, addrlen); }
-
-
-extern "C" ssize_t sendto(int libc_fd, const void *buf, ::size_t len, int flags,
-                            const struct sockaddr *dest_addr, socklen_t addrlen)
-{
-	return _sendto(libc_fd, buf, len, flags, dest_addr, addrlen);
-}
-
-
-extern "C" int _getsockopt(int libc_fd, int level, int optname,
-                          void *optval, socklen_t *optlen)
-{
-	return getsockopt(libc_fd, level, optname, optval, optlen);
-}
-
-
-extern "C" int getsockopt(int libc_fd, int level, int optname,
-                          void *optval, socklen_t *optlen) {
-	FD_FUNC_WRAPPER(getsockopt, libc_fd, level, optname, optval, optlen); }
-
-
-extern "C" int _setsockopt(int libc_fd, int level, int optname,
-                          const void *optval, socklen_t optlen) {
-	FD_FUNC_WRAPPER(setsockopt, libc_fd, level, optname, optval, optlen); }
-
-
-extern "C" int setsockopt(int libc_fd, int level, int optname,
-                          const void *optval, socklen_t optlen)
-{
-	return _setsockopt(libc_fd, level, optname, optval, optlen);
-}
-
-
-extern "C" int shutdown(int libc_fd, int how) {
-	FD_FUNC_WRAPPER(shutdown, libc_fd, how); }
-
-extern "C" int socket(int domain, int type, int protocol)
-{
-	Plugin *plugin;
-	File_descriptor *new_fdo;
-
-	plugin = plugin_registry()->get_plugin_for_socket(domain, type, protocol);
-
-	if (!plugin) {
-		PERR("no plugin found for socket()");
-		return -1;
-	}
-
-	new_fdo = plugin->socket(domain, type, protocol);
-	if (!new_fdo) {
-		PERR("plugin()->socket() failed");
-		return -1;
-	}
-
-	return new_fdo->libc_fd;
-}
-
-
-extern "C" int _socket(int domain, int type, int protocol)
-{
-	return socket(domain, type, protocol);
-}
-
-
 extern "C" int stat(const char *path, struct stat *buf)
 {
-	PDBGV("path = %s", path);
 	try {
 		Absolute_path resolved_path;
 		resolve_symlinks(path, resolved_path);
@@ -869,6 +639,5 @@ extern "C" ssize_t write(int libc_fd, const void *buf, ::size_t count) {
 extern "C" int __getcwd(char *dst, ::size_t dst_size)
 {
 	Genode::strncpy(dst, cwd().base(), dst_size);
-	PDBGV("cwd = %s", dst);
 	return 0;
 }

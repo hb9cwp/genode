@@ -170,6 +170,7 @@
 
 	/* Restore kernel segment registers */
 	mov $0x10, %rbx
+	mov %rbx, %ss
 	mov %rbx, %ds
 	mov %rbx, %es
 	mov %rbx, %fs
@@ -244,6 +245,14 @@
 	popq %rax
 
 	iretq
+
+	/* VM entry: Switch to guest VM */
+
+	.global _vt_vm_entry
+	_vt_vm_entry:
+	sti
+	mov $1, %rax
+	vmcall
 
 	/************************************************
 	 ** Space for Interrupt Descriptor Table (IDT) **

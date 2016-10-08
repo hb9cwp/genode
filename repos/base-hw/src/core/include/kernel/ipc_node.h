@@ -12,11 +12,14 @@
  * under the terms of the GNU General Public License version 2.
  */
 
-#ifndef _KERNEL__IPC_NODE_H_
-#define _KERNEL__IPC_NODE_H_
+#ifndef _CORE__INCLUDE__KERNEL__IPC_NODE_H_
+#define _CORE__INCLUDE__KERNEL__IPC_NODE_H_
 
 /* Genode includes */
 #include <util/construct_at.h>
+
+/* base-local includes */
+#include <base/internal/native_utcb.h>
 
 /* core includes */
 #include <kernel/fifo.h>
@@ -42,11 +45,9 @@ class Kernel::Ipc_node : public Ipc_node_queue::Element
 
 		enum State
 		{
-			INACTIVE                = 1,
-			AWAIT_REPLY             = 2,
-			AWAIT_REQUEST           = 3,
-			PREPARE_REPLY           = 4,
-			PREPARE_AND_AWAIT_REPLY = 5,
+			INACTIVE      = 1,
+			AWAIT_REPLY   = 2,
+			AWAIT_REQUEST = 3,
 		};
 
 		void _init(Genode::Native_utcb * utcb, Ipc_node * callee);
@@ -65,7 +66,7 @@ class Kernel::Ipc_node : public Ipc_node_queue::Element
 		Ipc_node_queue        _request_queue;
 
 		/* pre-allocation array for obkject identity references */
-		void * _obj_id_ref_ptr[Genode::Msgbuf_base::MAX_CAP_ARGS];
+		void * _obj_id_ref_ptr[Genode::Msgbuf_base::MAX_CAPS_PER_MSG];
 
 		inline void copy_msg(Ipc_node * const sender);
 
@@ -170,12 +171,11 @@ class Kernel::Ipc_node : public Ipc_node_queue::Element
 		template <typename F> void for_each_helper(F f)
 		{
 			/* if we have a helper in the receive buffer, call 'f' for it */
-			if (_state == PREPARE_REPLY || _state == PREPARE_AND_AWAIT_REPLY) {
-				if (_caller->_help) { f(_caller); } }
+			if (_caller && _caller->_help) f(_caller);
 
 			/* call 'f' for each helper in our request queue */
 			_request_queue.for_each([f] (Ipc_node * const node) {
-					if (node->_help) { f(node); } });
+				if (node->_help) f(node); });
 		}
 
 		/**
@@ -205,4 +205,4 @@ class Kernel::Ipc_node : public Ipc_node_queue::Element
 		Genode::Native_utcb * utcb() { return _utcb; }
 };
 
-#endif /* _KERNEL__IPC_NODE_H_ */
+#endif /* _CORE__INCLUDE__KERNEL__IPC_NODE_H_ */

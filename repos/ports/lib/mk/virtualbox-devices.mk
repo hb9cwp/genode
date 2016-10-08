@@ -21,6 +21,7 @@ SRC_CC += Devices/Graphics/HGSMI/HGSMIHost.cpp
 SRC_CC += Devices/Graphics/HGSMI/HGSMIHostHlp.cpp
 SRC_CC += Devices/Graphics/HGSMI/SHGSMIHost.cpp
 SRC_CC += Devices/Storage/ATAPIPassthrough.cpp
+SRC_CC += Devices/Storage/DevAHCI.cpp
 SRC_CC += Devices/Storage/DevATA.cpp
 SRC_CC += Devices/Storage/Debug.cpp
 SRC_CC += Devices/Storage/DevFdc.c
@@ -34,24 +35,34 @@ SRC_CC += GuestHost/HGSMI/HGSMICommon.cpp
 SRC_CC += Devices/Serial/DevSerial.cpp
 SRC_CC += Devices/PC/DevIoApic.cpp
 
+SRC_C  += Devices/Audio/audio.c
+SRC_C  += Devices/Audio/audiosniffer.c
+SRC_C  += Devices/Audio/filteraudio.c
+SRC_C  += Devices/Audio/mixeng.c
+SRC_C  += Devices/Audio/noaudio.c
+SRC_CC += Devices/Audio/DevIchAc97.cpp
+SRC_CC += Devices/Audio/DevIchHda.cpp
+SRC_CC += Devices/Audio/DevIchHdaCodec.cpp
 SRC_CC += Devices/USB/DevOHCI.cpp
 SRC_CC += Devices/USB/USBProxyDevice.cpp
 SRC_CC += Devices/USB/VUSBDevice.cpp
 SRC_CC += Devices/USB/VUSBReadAhead.cpp
+SRC_CC += Devices/USB/VUSBSniffer.cpp
 SRC_CC += Devices/USB/VUSBUrb.cpp
 SRC_CC += Devices/Input/UsbMouse.cpp
 SRC_CC += Devices/Input/UsbKbd.cpp
 
 SRC_CC += Devices/build/VBoxDD.cpp
 
+SRC_CC += devxhci.cc
+
 INC_DIR += $(VBOX_DIR)/Devices/build
 INC_DIR += $(VBOX_DIR)/Devices/Bus
 
 CC_WARN += -Wno-unused-but-set-variable
 
-CC_OPT += -DVBOX_WITH_WDDM -DVBOX_WITH_WDDM_W8 -DVBOXWDDM_WITH_VBVA
-CC_OPT += -DVBOX_WITH_VDMA
-CC_OPT += -DVBOX_WITH_VMSVGA
+# found in src/VBox/Devices/Makefile.kmk
+CC_OPT += -DVBOX_HGCM_HOST_CODE
 
 Devices/Graphics/DevVGA.o: vbetables.h
 
@@ -84,3 +95,4 @@ vboxssdt-cpuhotplug.hex: vbox-cpuhotplug.dsl
 	rm $@.tmp $@.pre
 
 vpath %.dsl $(VBOX_DIR)/Devices/PC
+vpath %.cc  $(REP_DIR)/src/virtualbox

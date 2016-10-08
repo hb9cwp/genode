@@ -12,7 +12,7 @@
  */
 
 /* Genode includes */
-#include <base/printf.h>
+#include <base/log.h>
 
 /* libc plugin interface */
 #include <libc-plugin/fd_alloc.h>
@@ -39,6 +39,12 @@ Plugin::~Plugin()
 int Plugin::priority()
 {
 	return _priority;
+}
+
+
+bool Plugin::supports_access(char const *path, int amode)
+{
+	return false;
 }
 
 
@@ -142,7 +148,7 @@ bool Plugin::supports_mmap()
 #define DUMMY(ret_type, ret_val, name, args) \
 ret_type Plugin::name args \
 { \
-	PERR( #name " not implemented"); \
+	Genode::error(__func__, ": " #name " not implemented"); \
 	return ret_val; \
 }
 
@@ -189,6 +195,7 @@ DUMMY(ssize_t, -1, write,         (File_descriptor *, const void *, ::size_t));
 /*
  * Misc
  */
+DUMMY(int, -1, access,       (char const *, int));
 DUMMY(int, -1, execve,       (char const *, char *const[], char *const[]));
 DUMMY(void,  , freeaddrinfo, (struct ::addrinfo *));
 DUMMY(int, -1, getaddrinfo,  (const char *, const char *, const struct ::addrinfo *, struct ::addrinfo **));

@@ -12,11 +12,24 @@
  * under the terms of the GNU General Public License version 2.
  */
 
+#include <base/component.h>
 #include <base/printf.h>
+#include <base/log.h>
 
-int main(int argc, char **argv)
+
+void Component::construct(Genode::Env &env)
 {
-	Genode::printf("-1 = %d = %ld\n", -1, -1L);
+	using namespace Genode;
 
-	return 0;
+	log("hex range:          ", Hex_range<uint16_t>(0xe00, 0x880));
+	log("empty hex range:    ", Hex_range<uint32_t>(0xabc0000, 0));
+	log("hex range to limit: ", Hex_range<uint8_t>(0xf8, 8));
+	log("invalid hex range:  ", Hex_range<uint8_t>(0xf8, 0x10));
+	log("negative hex char:  ", Hex((char)-2LL, Hex::PREFIX, Hex::PAD));
+	log("positive hex char:  ", Hex((char) 2LL, Hex::PREFIX, Hex::PAD));
+
+	/* test that unsupported commands don't crash the printf parser */
+	printf("%#x %s\n", 0x38, "test 1");
+	printf("%#lx %s\n", 0x38L, "test 2");
+	printf("-1 = %d = %ld\n", -1, -1L);
 }

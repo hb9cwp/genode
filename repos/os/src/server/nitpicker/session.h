@@ -69,16 +69,19 @@ class Session : public Session_list::Element
 			 * Append label separator to match selectors with a trailing
 			 * separator.
 			 */
-			char label[Genode::Session_label::MAX_LEN + 4];
+			char label[Genode::Session_label::capacity() + 4];
 			Genode::snprintf(label, sizeof(label), "%s ->", _label.string());
 			return Genode::strcmp(label, selector,
 			                      Genode::strlen(selector)) == 0;
 		}
 
-		bool xray_opaque() const { return _domain && _domain->xray_opaque(); }
-
-		bool xray_no() const { return _domain && _domain->xray_no(); }
-
+		/**
+		 * Accessors to the domain configuration used in conditions
+		 */
+		bool label_visible()  const { return !_domain || _domain->label_visible(); }
+		bool content_client() const { return _domain && _domain->content_client(); }
+		bool hover_focused()  const { return !_domain || _domain->hover_focused(); }
+		bool hover_always()   const { return _domain && _domain->hover_always(); }
 		bool origin_pointer() const { return _domain && _domain->origin_pointer(); }
 
 		unsigned layer() const { return _domain ? _domain->layer() : ~0UL; }
@@ -166,6 +169,17 @@ class Session : public Session_list::Element
 			return s && (s->_domain == _domain);
 		}
 
+		bool has_focusable_domain()
+		{
+			return has_valid_domain()
+			    && (_domain->focus_click() || _domain->focus_transient());
+		}
+
+		bool has_transient_focusable_domain()
+		{
+			return has_valid_domain() && _domain->focus_transient();
+		}
+
 		bool has_valid_domain() const
 		{
 			return _domain;
@@ -182,17 +196,17 @@ class Session : public Session_list::Element
 		 * Select the policy that matches the label. If multiple policies
 		 * match, select the one with the largest number of characters.
 		 */
-		void apply_session_policy(Domain_registry const &domain_registry)
+		void apply_session_policy(Genode::Xml_node config,
+		                          Domain_registry const &domain_registry)
 		{
 			reset_domain();
 
 			try {
-				Genode::Session_policy policy(_label);
+				Genode::Session_policy policy(_label, config);
 
 				/* read domain attribute */
 				if (!policy.has_attribute("domain")) {
-					PERR("policy for label \"%s\" lacks domain declaration",
-					     _label.string());
+					Genode::error("policy for label \"", _label, "\" lacks domain declaration");
 					return;
 				}
 
@@ -206,7 +220,12 @@ class Session : public Session_list::Element
 				Domain_name name(buf);
 				_domain = domain_registry.lookup(name);
 
-			} catch (...) { }
+				if (!_domain)
+					Genode::error("policy for label \"", _label,
+					              "\" specifies nonexistent domain \"", name, "\"");
+
+			} catch (...) {
+				Genode::error("no policy matching label \"", _label, "\""); }
 		}
 };
 

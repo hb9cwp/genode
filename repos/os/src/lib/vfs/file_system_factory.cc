@@ -26,6 +26,8 @@
 #include <vfs/rom_file_system.h>
 #include <vfs/inline_file_system.h>
 #include <vfs/rtc_file_system.h>
+#include <vfs/ram_file_system.h>
+#include <vfs/symlink_file_system.h>
 
 
 class Default_file_system_factory : public Vfs::Global_file_system_factory
@@ -167,16 +169,21 @@ class Default_file_system_factory : public Vfs::Global_file_system_factory
 
 		Vfs::File_system *create(Genode::Xml_node node) override
 		{
-			/* try if type is handled by the currently registered fs types */
-			if (Vfs::File_system *fs = _try_create(node))
-				return fs;
-
-			/* probe for file system implementation available as shared lib */
-			if (_probe_external_factory(node)) {
-				/* try again with the new file system type loaded */
+			try {
+				/* try if type is handled by the currently registered fs types */
 				if (Vfs::File_system *fs = _try_create(node))
 					return fs;
-			}
+				/* if the builtin fails, do not try loading an external */
+			} catch (...) { return 0; }
+
+			try {
+				/* probe for file system implementation available as shared lib */
+				if (_probe_external_factory(node)) {
+					/* try again with the new file system type loaded */
+					if (Vfs::File_system *fs = _try_create(node))
+						return fs;
+				}
+			} catch (...) { }
 
 			return 0;
 		}
@@ -199,6 +206,8 @@ class Default_file_system_factory : public Vfs::Global_file_system_factory
 			_add_builtin_fs<Vfs::Rom_file_system>();
 			_add_builtin_fs<Vfs::Inline_file_system>();
 			_add_builtin_fs<Vfs::Rtc_file_system>();
+			_add_builtin_fs<Vfs::Ram_file_system>();
+			_add_builtin_fs<Vfs::Symlink_file_system>();
 		}
 };
 

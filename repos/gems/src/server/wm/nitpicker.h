@@ -5,7 +5,7 @@
  */
 
 /*
- * Copyright (C) 2014 Genode Labs GmbH
+ * Copyright (C) 2014-2016 Genode Labs GmbH
  *
  * This file is part of the Genode OS framework, which is distributed
  * under the terms of the GNU General Public License version 2.
@@ -33,6 +33,7 @@
 #include <window_registry.h>
 #include <decorator_nitpicker.h>
 #include <layouter_nitpicker.h>
+#include <direct_nitpicker.h>
 
 
 namespace Wm {
@@ -63,6 +64,7 @@ namespace Wm { namespace Nitpicker {
 	class View;
 	class Top_level_view;
 	class Child_view;
+	class Session_control_fn;
 	class Session_component;
 	class Root;
 
@@ -138,7 +140,7 @@ class Wm::Nitpicker::View : public Genode::Weak_object<View>,
 			View_handle real_neighbor_handle;
 
 			Locked_ptr<View> neighbor(_neighbor_ptr);
-			if (neighbor.is_valid())
+			if (neighbor.valid())
 				real_neighbor_handle = _real_nitpicker.view_handle(neighbor->real_view_cap());
 
 			if (_neighbor_behind)
@@ -227,23 +229,10 @@ class Wm::Nitpicker::Top_level_view : public View,
 		 */
 		Rect _content_geometry;
 
-		/*
-		 * The window title is the concatenation of the session label with
-		 * view title.
-		 */
-		struct Window_title : Title
-		{
-			Window_title(Session_label const session_label, Title const &title)
-			{
-				bool const has_title = Genode::strlen(title.string()) > 0;
-				char buf[256];
-				Genode::snprintf(buf, sizeof(buf), "%s%s%s",
-				                 session_label.string(),
-				                 has_title ? " " : "", title.string());
+		bool _resizeable = false;
 
-				*static_cast<Title *>(this) = Title(buf);
-			}
-		} _window_title;
+		Title         _window_title;
+		Session_label _session_label;
 
 		typedef Nitpicker::Session::Command Command;
 
@@ -256,13 +245,15 @@ class Wm::Nitpicker::Top_level_view : public View,
 		:
 			View(real_nitpicker, session_label, has_alpha),
 			_window_registry(window_registry),
-			_window_title(session_label, "")
+			_session_label(session_label)
 		{ }
 
 		~Top_level_view()
 		{
 			if (_win_id.valid())
 				_window_registry.destroy(_win_id);
+
+			View::lock_for_destruction();
 		}
 
 		void _propagate_view_geometry() override { }
@@ -277,7 +268,9 @@ class Wm::Nitpicker::Top_level_view : public View,
 			if (!_win_id.valid()) {
 				_win_id = _window_registry.create();
 				_window_registry.title(_win_id, _window_title.string());
+				_window_registry.label(_win_id, _session_label);
 				_window_registry.has_alpha(_win_id, View::has_alpha());
+				_window_registry.resizeable(_win_id, _resizeable);
 			}
 
 			_window_registry.size(_win_id, geometry.area());
@@ -291,7 +284,7 @@ class Wm::Nitpicker::Top_level_view : public View,
 		{
 			View::title(title);
 
-			_window_title = Window_title(_session_label, title);
+			_window_title = Title(title);
 
 			if (_win_id.valid())
 				_window_registry.title(_win_id, _window_title.string());
@@ -327,6 +320,16 @@ class Wm::Nitpicker::Top_level_view : public View,
 
 			return _real_nitpicker.view_capability(_real_handle);
 		}
+
+		void hidden(bool hidden) { _window_registry.hidden(_win_id, hidden); }
+
+		void resizeable(bool resizeable)
+		{
+			_resizeable = resizeable;
+
+			if (_win_id.valid())
+				_window_registry.resizeable(_win_id, resizeable);
+		}
 };
 
 
@@ -349,6 +352,11 @@ class Wm::Nitpicker::Child_view : public View,
 			try_to_init_real_view();
 		}
 
+		~Child_view()
+		{
+			View::lock_for_destruction();
+		}
+
 		void _propagate_view_geometry() override
 		{
 			_real_nitpicker.enqueue<Command::Geometry>(_real_handle, _geometry);
@@ -365,13 +373,13 @@ class Wm::Nitpicker::Child_view : public View,
 		bool belongs_to_win_id(Window_registry::Id id) const override
 		{
 			Locked_ptr<View> parent(_parent);
-			return parent.is_valid() && parent->belongs_to_win_id(id);
+			return parent.valid() && parent->belongs_to_win_id(id);
 		}
 
 		Point input_anchor_position() const override
 		{
 			Locked_ptr<View> parent(_parent);
-			if (parent.is_valid())
+			if (parent.valid())
 				return parent->input_anchor_position();
 
 			return Point();
@@ -383,7 +391,7 @@ class Wm::Nitpicker::Child_view : public View,
 				return;
 
 			Locked_ptr<View> parent(_parent);
-			if (!parent.is_valid())
+			if (!parent.valid())
 				return;
 
 			View_handle parent_handle = _real_nitpicker.view_handle(parent->real_view_cap());
@@ -404,6 +412,13 @@ class Wm::Nitpicker::Child_view : public View,
 };
 
 
+struct Wm::Nitpicker::Session_control_fn
+{
+	virtual void session_control(char const *selector, Session::Session_control) = 0;
+	
+};
+
+
 class Wm::Nitpicker::Session_component : public Rpc_object<Nitpicker::Session>,
                                          public List<Session_component>::Element
 {
@@ -416,6 +431,7 @@ class Wm::Nitpicker::Session_component : public Rpc_object<Nitpicker::Session>,
 		Nitpicker::Connection _session { _session_label.string() };
 
 		Window_registry             &_window_registry;
+		Session_control_fn          &_session_control_fn;
 		Entrypoint                  &_ep;
 		Tslab<Top_level_view, 4000>  _top_level_view_alloc;
 		Tslab<Child_view, 4000>      _child_view_alloc;
@@ -426,6 +442,7 @@ class Wm::Nitpicker::Session_component : public Rpc_object<Nitpicker::Session>,
 		Click_handler               &_click_handler;
 		Signal_context_capability    _mode_sigh;
 		Area                         _requested_size;
+		bool                         _resize_requested = false;
 		bool                         _has_alpha = false;
 
 		/*
@@ -497,7 +514,7 @@ class Wm::Nitpicker::Session_component : public Rpc_object<Nitpicker::Session>,
 			return Input::Event();
 		}
 
-		bool _is_click_into_unfocused_view(Input::Event const ev)
+		bool _click_into_unfocused_view(Input::Event const ev)
 		{
 			/*
 			 * XXX check if unfocused
@@ -520,7 +537,7 @@ class Wm::Nitpicker::Session_component : public Rpc_object<Nitpicker::Session>,
 			Input::Event const * const events =
 				_nitpicker_input_ds.local_addr<Input::Event>();
 
-			while (_nitpicker_input.is_pending()) {
+			while (_nitpicker_input.pending()) {
 
 				size_t const num_events = _nitpicker_input.flush();
 
@@ -531,7 +548,7 @@ class Wm::Nitpicker::Session_component : public Rpc_object<Nitpicker::Session>,
 					Input::Event const ev = events[i];
 
 					/* propagate layout-affecting events to the layouter */
-					if (_is_click_into_unfocused_view(ev))
+					if (_click_into_unfocused_view(ev))
 						_click_handler.handle_click(Point(ev.ax(), ev.ay()));
 
 					/*
@@ -575,6 +592,8 @@ class Wm::Nitpicker::Session_component : public Rpc_object<Nitpicker::Session>,
 				Top_level_view *view = new (_top_level_view_alloc)
 					Top_level_view(_session, _session_label, _has_alpha, _window_registry);
 
+				view->resizeable(_mode_sigh.valid());
+
 				_top_level_views.insert(view);
 				return *view;
 			}
@@ -610,7 +629,7 @@ class Wm::Nitpicker::Session_component : public Rpc_object<Nitpicker::Session>,
 			case Command::OP_GEOMETRY:
 				{
 					Locked_ptr<View> view(_view_handle_registry.lookup(command.geometry.view));
-					if (view.is_valid())
+					if (view.valid())
 						view->geometry(command.geometry.rect);
 					return;
 				}
@@ -618,7 +637,7 @@ class Wm::Nitpicker::Session_component : public Rpc_object<Nitpicker::Session>,
 			case Command::OP_OFFSET:
 				{
 					Locked_ptr<View> view(_view_handle_registry.lookup(command.offset.view));
-					if (view.is_valid())
+					if (view.valid())
 						view->buffer_offset(command.offset.offset);
 
 					return;
@@ -627,7 +646,7 @@ class Wm::Nitpicker::Session_component : public Rpc_object<Nitpicker::Session>,
 			case Command::OP_TO_FRONT:
 				{
 					Locked_ptr<View> view(_view_handle_registry.lookup(command.to_front.view));
-					if (!view.is_valid())
+					if (!view.valid())
 						return;
 
 					/* bring to front if no neighbor is specified */
@@ -654,9 +673,18 @@ class Wm::Nitpicker::Session_component : public Rpc_object<Nitpicker::Session>,
 
 			case Command::OP_TITLE:
 				{
+					char sanitized_title[command.title.title.capacity()];
+
+					Genode::strncpy(sanitized_title, command.title.title.string(),
+					                sizeof(sanitized_title));
+
+					for (char *c = sanitized_title; *c; c++)
+						if (*c == '"')
+							*c = '\'';
+
 					Locked_ptr<View> view(_view_handle_registry.lookup(command.title.view));
-					if (view.is_valid())
-						view->title(command.title.title.string());
+					if (view.valid())
+						view->title(sanitized_title);
 
 					return;
 				}
@@ -671,19 +699,20 @@ class Wm::Nitpicker::Session_component : public Rpc_object<Nitpicker::Session>,
 		/**
 		 * Constructor
 		 *
-		 * \param nitpicker  real nitpicker service
-		 * \param ep         entrypoint used for managing the views
+		 * \param ep  entrypoint used for managing the views
 		 */
 		Session_component(Ram_session_capability ram,
 		                  Window_registry       &window_registry,
 		                  Entrypoint            &ep,
 		                  Allocator             &session_alloc,
 		                  Session_label   const &session_label,
-		                  Click_handler         &click_handler)
+		                  Click_handler         &click_handler,
+		                  Session_control_fn    &session_control_fn)
 		:
 			_session_label(session_label),
 			_ram(ram),
 			_window_registry(window_registry),
+			_session_control_fn(session_control_fn),
 			_ep(ep),
 			_top_level_view_alloc(&session_alloc),
 			_child_view_alloc(&session_alloc),
@@ -753,13 +782,36 @@ class Wm::Nitpicker::Session_component : public Rpc_object<Nitpicker::Session>,
 			return false;
 		}
 
+		Session_label session_label() const { return _session_label; }
+
+		bool matches_session_label(char const *selector) const
+		{
+			/*
+			 * Append label separator to match selectors with a trailing
+			 * separator.
+			 *
+			 * The code originates from nitpicker's 'session.h'.
+			 */
+			char label[Genode::Session_label::capacity() + 4];
+			Genode::snprintf(label, sizeof(label), "%s ->", _session_label.string());
+			return Genode::strcmp(label, selector,
+			                      Genode::strlen(selector)) == 0;
+		}
+
 		void request_resize(Area size)
 		{
-			_requested_size = size;
+			_requested_size   = size;
+			_resize_requested = true;
 
 			/* notify client */
 			if (_mode_sigh.valid())
 				Signal_transmitter(_mode_sigh).submit();
+		}
+
+		void hidden(bool hidden)
+		{
+			for (Top_level_view *v = _top_level_views.first(); v; v = v->next())
+				v->hidden(hidden);
 		}
 
 		/**
@@ -797,7 +849,7 @@ class Wm::Nitpicker::Session_component : public Rpc_object<Nitpicker::Session>,
 		{
 			try {
 				Locked_ptr<View> view(_view_handle_registry.lookup(handle));
-				if (view.is_valid())
+				if (view.valid())
 					_destroy_view_object(*view);
 			}
 			catch (View_handle_registry::Lookup_failed) { }
@@ -807,19 +859,16 @@ class Wm::Nitpicker::Session_component : public Rpc_object<Nitpicker::Session>,
 
 		View_handle view_handle(View_capability view_cap, View_handle handle) override
 		{
-			View *view = dynamic_cast<View *>(_ep.rpc_ep().lookup_and_lock(view_cap));
-			if (!view) return View_handle();
-
-			Object_pool<Rpc_object_base>::Guard guard(view);
-
-			return _view_handle_registry.alloc(*view, handle);
+			return _ep.rpc_ep().apply(view_cap, [&] (View *view) {
+				return (view) ? _view_handle_registry.alloc(*view, handle)
+				              : View_handle(); });
 		}
 
 		View_capability view_capability(View_handle handle) override
 		{
 			Locked_ptr<View> view(_view_handle_registry.lookup(handle));
 
-			return view.is_valid() ? view->cap() : View_capability();
+			return view.valid() ? view->cap() : View_capability();
 		}
 
 		void release_view_handle(View_handle handle) override
@@ -828,7 +877,7 @@ class Wm::Nitpicker::Session_component : public Rpc_object<Nitpicker::Session>,
 				_view_handle_registry.free(handle); }
 
 			catch (View_handle_registry::Lookup_failed) {
-				PWRN("view lookup failed while releasing view handle");
+				Genode::warning("view lookup failed while releasing view handle");
 				return;
 			}
 		}
@@ -844,8 +893,11 @@ class Wm::Nitpicker::Session_component : public Rpc_object<Nitpicker::Session>,
 				try {
 					_execute_command(_command_buffer.get(i)); }
 				catch (View_handle_registry::Lookup_failed) {
-					PWRN("view lookup failed during command execution"); }
+					Genode::warning("view lookup failed during command execution"); }
 			}
+
+			/* propagate window-list changes to the layouter */
+			_window_registry.flush();
 		}
 
 		Framebuffer::Mode mode() override
@@ -856,7 +908,7 @@ class Wm::Nitpicker::Session_component : public Rpc_object<Nitpicker::Session>,
 			 * While resizing the window, return requested window size as
 			 * mode
 			 */
-			if (_requested_size.valid())
+			if (_resize_requested)
 				return Framebuffer::Mode(_requested_size.w(),
 				                         _requested_size.h(),
 				                         real_mode.format());
@@ -880,20 +932,56 @@ class Wm::Nitpicker::Session_component : public Rpc_object<Nitpicker::Session>,
 		void mode_sigh(Genode::Signal_context_capability sigh) override
 		{
 			_mode_sigh = sigh;
+
+			/*
+			 * We consider a window as resizable if the client shows interest
+			 * in mode-change notifications.
+			 */
+			bool const resizeable = _mode_sigh.valid();
+
+			for (Top_level_view *v = _top_level_views.first(); v; v = v->next())
+				v->resizeable(resizeable);
 		}
 
 		void buffer(Framebuffer::Mode mode, bool has_alpha) override
 		{
-			_session.buffer(mode, has_alpha);
+			/*
+			 * We must not perform the 'buffer' operation on the connection
+			 * object because the 'Nitpicker::Connection::buffer'
+			 * implementation implicitly performs upgrade operations.
+			 *
+			 * Here, we merely want to forward the buffer RPC call to the
+			 * wrapped nitpicker session. Otherwise, we would perform
+			 * session upgrades initiated by the wm client's buffer
+			 * operation twice.
+			 */
+			Nitpicker::Session_client(_session.cap()).buffer(mode, has_alpha);
 			_has_alpha = has_alpha;
 		}
 
 		void focus(Genode::Capability<Nitpicker::Session>) { }
+
+		void session_control(Label suffix, Session_control operation) override
+		{
+			/*
+			 * Append label argument to session label
+			 *
+			 * The code originates from nitpicker's 'main.cc'.
+			 */
+			char selector[Label::size()];
+
+			Genode::snprintf(selector, sizeof(selector), "%s%s%s",
+			                 _session_label.string(),
+			                 suffix.length() ? " -> " : "", suffix.string());
+
+			_session_control_fn.session_control(selector, operation);
+		}
 };
 
 
 class Wm::Nitpicker::Root : public Genode::Rpc_object<Genode::Typed_root<Session> >,
-                            public Decorator_content_callback
+                            public Decorator_content_callback,
+                            public Session_control_fn
 {
 	private:
 
@@ -906,6 +994,10 @@ class Wm::Nitpicker::Root : public Genode::Rpc_object<Genode::Typed_root<Session
 		enum { STACK_SIZE = 1024*sizeof(long) };
 
 		Reporter &_pointer_reporter;
+
+		Reporter &_focus_request_reporter;
+
+		unsigned _focus_request_cnt = 0;
 
 		Last_motion _last_motion = LAST_MOTION_DECORATOR;
 
@@ -979,7 +1071,12 @@ class Wm::Nitpicker::Root : public Genode::Rpc_object<Genode::Typed_root<Session
 
 		Layouter_nitpicker_session *_layouter_session = nullptr;
 
-		Decorator_nitpicker_session *_decorator_session = nullptr;
+		List<Decorator_nitpicker_session> _decorator_sessions;
+
+		/**
+		 * Nitpicker session used to perform session-control operations
+		 */
+		Nitpicker::Session &_focus_nitpicker_session;
 
 	public:
 
@@ -989,11 +1086,14 @@ class Wm::Nitpicker::Root : public Genode::Rpc_object<Genode::Typed_root<Session
 		Root(Entrypoint &ep,
 		     Window_registry &window_registry, Allocator &md_alloc,
 		     Ram_session_capability ram,
-		     Reporter &pointer_reporter)
+		     Reporter &pointer_reporter, Reporter &focus_request_reporter,
+		     Nitpicker::Session &focus_nitpicker_session)
 		:
 			_ep(ep), _md_alloc(md_alloc), _ram(ram),
 			_pointer_reporter(pointer_reporter),
-			_window_registry(window_registry)
+			_focus_request_reporter(focus_request_reporter),
+			_window_registry(window_registry),
+			_focus_nitpicker_session(focus_nitpicker_session)
 		{
 			_window_layouter_input.event_queue().enabled(true);
 
@@ -1008,9 +1108,10 @@ class Wm::Nitpicker::Root : public Genode::Rpc_object<Genode::Typed_root<Session
 		Genode::Session_capability session(Session_args const &args,
 		                                   Affinity     const &affinity) override
 		{
-			Genode::Session_label session_label(args.string());
+			Genode::Session_label const session_label =
+				Genode::label_from_args(args.string());
 
-			enum Role { ROLE_DECORATOR, ROLE_LAYOUTER, ROLE_REGULAR };
+			enum Role { ROLE_DECORATOR, ROLE_LAYOUTER, ROLE_REGULAR, ROLE_DIRECT };
 			Role role = ROLE_REGULAR;
 
 			/*
@@ -1027,6 +1128,9 @@ class Wm::Nitpicker::Root : public Genode::Rpc_object<Genode::Typed_root<Session
 
 					if (policy.attribute(role_attr).has_value("decorator"))
 						role = ROLE_DECORATOR;
+
+					if (policy.attribute(role_attr).has_value("direct"))
+						role = ROLE_DIRECT;
 				}
 			}
 			catch (...) { }
@@ -1038,20 +1142,21 @@ class Wm::Nitpicker::Root : public Genode::Rpc_object<Genode::Typed_root<Session
 					auto session = new (_md_alloc)
 						Session_component(_ram, _window_registry,
 						                  _ep, _md_alloc, session_label,
-						                  _click_handler);
+						                  _click_handler, *this);
 					_sessions.insert(session);
 					return _ep.manage(*session);
 				}
 
 			case ROLE_DECORATOR:
 				{
-					_decorator_session = new (_md_alloc)
+					auto session = new (_md_alloc)
 						Decorator_nitpicker_session(_ram, _ep, _md_alloc,
 						                            _pointer_reporter,
 						                            _last_motion,
 						                            _window_layouter_input,
 						                            *this);
-					return _ep.manage(*_decorator_session);
+					_decorator_sessions.insert(session);
+					return _ep.manage(*session);
 				}
 
 			case ROLE_LAYOUTER:
@@ -1062,6 +1167,14 @@ class Wm::Nitpicker::Root : public Genode::Rpc_object<Genode::Typed_root<Session
 
 					return _ep.manage(*_layouter_session);
 				}
+
+			case ROLE_DIRECT:
+				{
+					Direct_nitpicker_session *session = new (_md_alloc)
+						Direct_nitpicker_session(session_label);
+
+					return _ep.manage(*session);
+				}
 			}
 
 			return Session_capability();
@@ -1069,53 +1182,131 @@ class Wm::Nitpicker::Root : public Genode::Rpc_object<Genode::Typed_root<Session
 
 		void upgrade(Genode::Session_capability session_cap, Upgrade_args const &args) override
 		{
-			if (!args.is_valid_string()) throw Root::Invalid_args();
+			if (!args.valid_string()) throw Root::Invalid_args();
 
-			Rpc_object_base *session = _ep.rpc_ep().lookup_and_lock(session_cap);
+			auto lambda = [&] (Rpc_object_base *session) {
+				if (!session) {
+					Genode::warning("session lookup failed");
+					return;
+				}
 
-			if (!session) {
-				PDBG("session lookup failed");
-				return;
-			}
+				Session_component *regular_session =
+					dynamic_cast<Session_component *>(session);
 
-			Session_component *regular_session =
-				dynamic_cast<Session_component *>(session);
+				if (regular_session)
+					regular_session->upgrade(args.string());
 
-			if (regular_session)
-				regular_session->upgrade(args.string());
+				Decorator_nitpicker_session *decorator_session =
+					dynamic_cast<Decorator_nitpicker_session *>(session);
 
-			Decorator_nitpicker_session *decorator_session =
-				dynamic_cast<Decorator_nitpicker_session *>(session);
+				if (decorator_session)
+					decorator_session->upgrade(args.string());
 
-			if (decorator_session)
-				decorator_session->upgrade(args.string());
+				Direct_nitpicker_session *direct_session =
+					dynamic_cast<Direct_nitpicker_session *>(session);
 
-			session->release();
+				if (direct_session)
+					direct_session->upgrade(args.string());
+			};
+			_ep.rpc_ep().apply(session_cap, lambda);
 		}
 
 		void close(Genode::Session_capability session_cap) override
 		{
-			Rpc_object_base *session = _ep.rpc_ep().lookup_and_lock(session_cap);
+			Genode::Rpc_entrypoint &ep = _ep.rpc_ep();
 
-			Session_component *regular_session = dynamic_cast<Session_component *>(session);
+			Session_component *regular_session =
+				ep.apply(session_cap, [this] (Session_component *session) {
+					if (session) {
+						_sessions.remove(session);
+						_ep.dissolve(*session);
+					}
+					return session;
+				});
 			if (regular_session) {
-				_sessions.remove(regular_session);
-				_ep.dissolve(*regular_session);
 				Genode::destroy(_md_alloc, regular_session);
 				return;
 			}
 
-			if (session == _decorator_session) {
-				_ep.dissolve(*_decorator_session);
-				Genode::destroy(_md_alloc, _decorator_session);
-				_decorator_session = nullptr;
+			Direct_nitpicker_session *direct_session =
+				ep.apply(session_cap, [this] (Direct_nitpicker_session *session) {
+					if (session) {
+						_ep.dissolve(*session);
+					}
+					return session;
+				});
+			if (direct_session) {
+				Genode::destroy(_md_alloc, direct_session);
+				return;
 			}
 
-			if (session == _layouter_session) {
-				_ep.dissolve(*_layouter_session);
-				Genode::destroy(_md_alloc, _layouter_session);
-				_layouter_session = nullptr;
+			Decorator_nitpicker_session *decorator_session =
+				ep.apply(session_cap, [this] (Decorator_nitpicker_session *session) {
+					if (session) {
+						_decorator_sessions.remove(session);
+						_ep.dissolve(*session);
+					}
+					return session;
+				});
+			if (decorator_session) {
+				Genode::destroy(_md_alloc, decorator_session);
+				return;
 			}
+
+			auto layouter_lambda = [this] (Layouter_nitpicker_session *session) {
+				_ep.dissolve(*_layouter_session);
+				_layouter_session = nullptr;
+				return session;
+			};
+
+			if (ep.apply(session_cap, layouter_lambda) == _layouter_session) {
+				Genode::destroy(_md_alloc, _layouter_session);
+				return;
+			}
+		}
+
+
+		/**********************************
+		 ** Session_control_fn interface **
+		 **********************************/
+
+		void session_control(char const *selector, Session::Session_control operation) override
+		{
+			for (Session_component *s = _sessions.first(); s; s = s->next()) {
+
+				if (!s->matches_session_label(selector))
+					continue;
+
+				switch (operation) {
+				case Session::SESSION_CONTROL_SHOW:
+					s->hidden(false);
+					break;
+
+				case Session::SESSION_CONTROL_HIDE:
+					s->hidden(true);
+					break;
+
+				case Session::SESSION_CONTROL_TO_FRONT:
+
+					/* post focus request to the layouter */
+					Genode::Reporter::Xml_generator
+						xml(_focus_request_reporter, [&] () {
+							xml.attribute("label", s->session_label().string());
+							xml.attribute("id", ++_focus_request_cnt);
+						});
+
+					break;
+				}
+			}
+
+			_window_registry.flush();
+
+			/*
+			 * Forward the request to the nitpicker control session to apply
+			 * the show/hide/to-front operations on "direct" nitpicker
+			 * sessions.
+			 */
+			_focus_nitpicker_session.session_control(selector, operation);
 		}
 
 

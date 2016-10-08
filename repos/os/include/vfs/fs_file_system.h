@@ -5,7 +5,7 @@
  */
 
 /*
- * Copyright (C) 2012-2014 Genode Labs GmbH
+ * Copyright (C) 2012-2016 Genode Labs GmbH
  *
  * This file is part of the Genode OS framework, which is distributed
  * under the terms of the GNU General Public License version 2.
@@ -23,8 +23,6 @@ namespace Vfs { class Fs_file_system; }
 
 class Vfs::Fs_file_system : public File_system
 {
-	enum { verbose = false };
-
 	private:
 
 		/*
@@ -38,18 +36,11 @@ class Vfs::Fs_file_system : public File_system
 
 		Genode::Allocator_avl _fs_packet_alloc;
 
-		struct Label
-		{
-			enum { LABEL_MAX_LEN = 64 };
-			char string[LABEL_MAX_LEN];
+		typedef Genode::String<64> Label_string;
+		Label_string _label;
 
-			Label(Xml_node config)
-			{
-				string[0] = 0;
-				try { config.attribute("label").value(string, sizeof(string)); }
-				catch (...) { }
-			}
-		} _label;
+		typedef Genode::String<::File_system::MAX_NAME_LEN> Root_string;
+		Root_string _root;
 
 		::File_system::Connection _fs;
 
@@ -61,16 +52,10 @@ class Vfs::Fs_file_system : public File_system
 
 			public:
 
-				Fs_vfs_handle(File_system &fs, int status_flags,
-				              ::File_system::File_handle handle)
-				: Vfs_handle(fs, fs, status_flags), _handle(handle)
+				Fs_vfs_handle(File_system &fs, Allocator &alloc,
+				              int status_flags, ::File_system::File_handle handle)
+				: Vfs_handle(fs, fs, alloc, status_flags), _handle(handle)
 				{ }
-
-				~Fs_vfs_handle()
-				{
-					Fs_file_system &fs = static_cast<Fs_file_system &>(ds());
-					fs._fs.close(_handle);
-				}
 
 				::File_system::File_handle file_handle() const { return _handle; }
 		};
@@ -100,7 +85,6 @@ class Vfs::Fs_file_system : public File_system
 
 			::File_system::Packet_descriptor const
 				packet_in(source.alloc_packet(clipped_count),
-				          0,
 				          node_handle,
 				          ::File_system::Packet_descriptor::READ,
 				          clipped_count,
@@ -137,7 +121,6 @@ class Vfs::Fs_file_system : public File_system
 
 			::File_system::Packet_descriptor
 				packet(source.alloc_packet(count),
-				       0,
 				       node_handle,
 				       ::File_system::Packet_descriptor::WRITE,
 				       count,
@@ -147,28 +130,34 @@ class Vfs::Fs_file_system : public File_system
 
 			/* pass packet to server side */
 			source.submit_packet(packet);
-			source.get_acked_packet();
+
+			/* obtain result packet descriptor with updated status info */
+			::File_system::Packet_descriptor const
+				packet_out = source.get_acked_packet();
 
 			/*
 			 * XXX check if acked packet belongs to request,
 			 *     needed for thread safety
 			 */
 
+			file_size const write_num_bytes = min(packet_out.length(), count);
+
 			source.release_packet(packet);
 
-			return count;
+			return write_num_bytes;
 		}
 
 	public:
 
-		/*
-		 * XXX read label from config
-		 */
 		Fs_file_system(Xml_node config)
 		:
 			_fs_packet_alloc(env()->heap()),
-			_label(config),
-			_fs(_fs_packet_alloc, 128*1024, _label.string)
+			_label(config.attribute_value("label", Label_string())),
+			_root( config.attribute_value("root",  Root_string())),
+			_fs(_fs_packet_alloc,
+			    ::File_system::DEFAULT_TX_BUF_SIZE,
+			    _label.string(), _root.string(),
+			    config.attribute_value("writeable", true))
 		{ }
 
 
@@ -217,7 +206,6 @@ class Vfs::Fs_file_system : public File_system
 
 					::File_system::Packet_descriptor
 						packet(source.alloc_packet(count),
-							   0,
 							   file,
 							   ::File_system::Packet_descriptor::READ,
 							   count,
@@ -249,7 +237,8 @@ class Vfs::Fs_file_system : public File_system
 
 		void release(char const *path, Dataspace_capability ds_cap) override
 		{
-			env()->ram_session()->free(static_cap_cast<Genode::Ram_dataspace>(ds_cap));
+			if (ds_cap.valid())
+				env()->ram_session()->free(static_cap_cast<Genode::Ram_dataspace>(ds_cap));
 		}
 
 		Stat_result stat(char const *path, Stat &out) override
@@ -260,25 +249,25 @@ class Vfs::Fs_file_system : public File_system
 				::File_system::Node_handle node = _fs.node(path);
 				Fs_handle_guard node_guard(_fs, node);
 				status = _fs.status(node);
-			} catch (...) {
-				if (verbose)
-					PDBG("stat failed for path '%s'", path);
-				return STAT_ERR_NO_ENTRY;
 			}
+			catch (::File_system::Lookup_failed)   { return STAT_ERR_NO_ENTRY; }
+			catch (::File_system::Out_of_metadata) { return STAT_ERR_NO_PERM;  }
 
-			memset(&out, 0, sizeof(out));
+			out = Stat();
 
 			out.size = status.size;
 			out.mode = STAT_MODE_FILE | 0777;
 
-			if (status.is_symlink())
+			if (status.symlink())
 				out.mode = STAT_MODE_SYMLINK | 0777;
 
-			if (status.is_directory())
+			if (status.directory())
 				out.mode = STAT_MODE_DIRECTORY | 0777;
 
 			out.uid = 0;
 			out.gid = 0;
+			out.inode = status.inode;
+			out.device = (Genode::addr_t)this;
 			return STAT_OK;
 		}
 
@@ -291,14 +280,17 @@ class Vfs::Fs_file_system : public File_system
 			if (strcmp(path, "") == 0)
 				path = "/";
 
-			::File_system::Dir_handle dir_handle = _fs.dir(path, false);
+			::File_system::Dir_handle dir_handle;
+			try { dir_handle = _fs.dir(path, false); }
+			catch (::File_system::Lookup_failed) { return DIRENT_ERR_INVALID_PATH; }
+			catch (::File_system::Name_too_long) { return DIRENT_ERR_INVALID_PATH; }
+			catch (...) { return DIRENT_ERR_NO_PERM; }
 			Fs_handle_guard dir_guard(_fs, dir_handle);
 
 			enum { DIRENT_SIZE = sizeof(::File_system::Directory_entry) };
 
 			::File_system::Packet_descriptor
 				packet(source.alloc_packet(DIRENT_SIZE),
-				       0,
 				       dir_handle,
 				       ::File_system::Packet_descriptor::READ,
 				       DIRENT_SIZE,
@@ -332,9 +324,8 @@ class Vfs::Fs_file_system : public File_system
 			case Directory_entry::TYPE_SYMLINK:   type = DIRENT_TYPE_SYMLINK;   break;
 			}
 
+			out.fileno = entry->inode;
 			out.type   = type;
-			out.fileno = index + 1;
-
 			strncpy(out.name, entry->name, sizeof(out.name));
 
 			source.release_packet(packet);
@@ -356,9 +347,11 @@ class Vfs::Fs_file_system : public File_system
 
 				_fs.unlink(dir, file_name.base() + 1);
 			}
-			catch (...) {
-				return UNLINK_ERR_NO_ENTRY;
-			}
+			catch (::File_system::Invalid_handle)    { return UNLINK_ERR_NO_ENTRY;  }
+			catch (::File_system::Invalid_name)      { return UNLINK_ERR_NO_ENTRY;  }
+			catch (::File_system::Lookup_failed)     { return UNLINK_ERR_NO_ENTRY;  }
+			catch (::File_system::Not_empty)         { return UNLINK_ERR_NOT_EMPTY; }
+			catch (::File_system::Permission_denied) { return UNLINK_ERR_NO_PERM;   }
 
 			return UNLINK_OK;
 		}
@@ -386,13 +379,17 @@ class Vfs::Fs_file_system : public File_system
 				out_len = _read(symlink_handle, buf, buf_size, 0);
 
 				return READLINK_OK;
-			} catch (...) { }
-
-			return READLINK_ERR_NO_ENTRY;
+			}
+			catch (::File_system::Lookup_failed)  { return READLINK_ERR_NO_ENTRY; }
+			catch (::File_system::Invalid_handle) { return READLINK_ERR_NO_ENTRY; }
+			catch (...) { return READLINK_ERR_NO_PERM; }
 		}
 
 		Rename_result rename(char const *from_path, char const *to_path) override
 		{
+			if ((strcmp(from_path, to_path) == 0) && leaf_path(from_path))
+				return RENAME_OK;
+
 			Absolute_path from_dir_path(from_path);
 			from_dir_path.strip_last_element();
 
@@ -408,15 +405,14 @@ class Vfs::Fs_file_system : public File_system
 			try {
 				::File_system::Dir_handle from_dir = _fs.dir(from_dir_path.base(), false);
 				Fs_handle_guard from_dir_guard(_fs, from_dir);
-
 				::File_system::Dir_handle to_dir = _fs.dir(to_dir_path.base(), false);
 				Fs_handle_guard to_dir_guard(_fs, to_dir);
 
 				_fs.move(from_dir, from_file_name.base() + 1,
 				         to_dir,   to_file_name.base() + 1);
-
-			} catch (...) {
-				return RENAME_ERR_NO_ENTRY; }
+			}
+			catch (::File_system::Lookup_failed) { return RENAME_ERR_NO_ENTRY; }
+			catch (...)                          { return RENAME_ERR_NO_PERM; }
 
 			return RENAME_OK;
 		}
@@ -429,16 +425,16 @@ class Vfs::Fs_file_system : public File_system
 			Absolute_path abs_path(path);
 
 			try {
-				_fs.dir(abs_path.base(), true);
-				return MKDIR_OK;
+				_fs.close(_fs.dir(abs_path.base(), true));
 			}
 			catch (::File_system::Permission_denied)   { return MKDIR_ERR_NO_PERM; }
 			catch (::File_system::Node_already_exists) { return MKDIR_ERR_EXISTS; }
 			catch (::File_system::Lookup_failed)       { return MKDIR_ERR_NO_ENTRY; }
 			catch (::File_system::Name_too_long)       { return MKDIR_ERR_NAME_TOO_LONG; }
 			catch (::File_system::No_space)            { return MKDIR_ERR_NO_SPACE; }
+			catch (::File_system::Out_of_metadata)     { return MKDIR_ERR_NO_ENTRY; }
 
-			return MKDIR_ERR_NO_PERM;
+			return MKDIR_OK;
 		}
 
 		Symlink_result symlink(char const *from, char const *to) override
@@ -467,15 +463,16 @@ class Vfs::Fs_file_system : public File_system
 				Fs_handle_guard symlink_guard(_fs, symlink_handle);
 
 				_write(symlink_handle, from, strlen(from) + 1, 0);
-				return SYMLINK_OK;
 			}
 			catch (::File_system::Invalid_handle)      { return SYMLINK_ERR_NO_ENTRY; }
-			catch (::File_system::Node_already_exists) { return SYMLINK_ERR_EXISTS; }
+			catch (::File_system::Node_already_exists) { return SYMLINK_ERR_EXISTS;   }
 			catch (::File_system::Invalid_name)        { return SYMLINK_ERR_NAME_TOO_LONG; }
 			catch (::File_system::Lookup_failed)       { return SYMLINK_ERR_NO_ENTRY; }
-			catch (::File_system::Permission_denied)   { return SYMLINK_ERR_NO_PERM; }
+			catch (::File_system::Permission_denied)   { return SYMLINK_ERR_NO_PERM;  }
+			catch (::File_system::No_space)            { return SYMLINK_ERR_NO_SPACE; }
+			catch (::File_system::Out_of_metadata)     { return SYMLINK_ERR_NO_ENTRY; }
 
-			return SYMLINK_ERR_NO_ENTRY;
+			return SYMLINK_OK;
 		}
 
 		file_size num_dirent(char const *path) override
@@ -483,12 +480,8 @@ class Vfs::Fs_file_system : public File_system
 			if (strcmp(path, "") == 0)
 				path = "/";
 
-			/*
-			 * XXX handle more exceptions
-			 */
 			::File_system::Node_handle node;
-			try { node = _fs.node(path); } catch (::File_system::Lookup_failed) { return 0; }
-
+			try { node = _fs.node(path); } catch (...) { return 0; }
 			Fs_handle_guard node_guard(_fs, node);
 
 			::File_system::Status status = _fs.status(node);
@@ -496,7 +489,7 @@ class Vfs::Fs_file_system : public File_system
 			return status.size / sizeof(::File_system::Directory_entry);
 		}
 
-		bool is_directory(char const *path) override
+		bool directory(char const *path) override
 		{
 			try {
 				::File_system::Node_handle node = _fs.node(path);
@@ -504,7 +497,7 @@ class Vfs::Fs_file_system : public File_system
 
 				::File_system::Status status = _fs.status(node);
 
-				return status.is_directory();
+				return status.directory();
 			}
 			catch (...) { return false; }
 		}
@@ -516,13 +509,12 @@ class Vfs::Fs_file_system : public File_system
 				::File_system::Node_handle node = _fs.node(path);
 				_fs.close(node);
 			}
-			catch (...) {
-				return 0; }
+			catch (...) { return 0; }
 
 			return path;
 		}
 
-		Open_result open(char const *path, unsigned vfs_mode, Vfs_handle **out_handle) override
+		Open_result open(char const *path, unsigned vfs_mode, Vfs_handle **out_handle, Genode::Allocator& alloc) override
 		{
 			Lock::Guard guard(_lock);
 
@@ -543,10 +535,6 @@ class Vfs::Fs_file_system : public File_system
 
 			bool const create = vfs_mode & OPEN_MODE_CREATE;
 
-			if (create)
-				if (verbose)
-					PDBG("creation of file %s requested", file_name.base() + 1);
-
 			try {
 				::File_system::Dir_handle dir = _fs.dir(dir_path.base(), false);
 				Fs_handle_guard dir_guard(_fs, dir);
@@ -554,15 +542,32 @@ class Vfs::Fs_file_system : public File_system
 				::File_system::File_handle file = _fs.file(dir, file_name.base() + 1,
 				                                           mode, create);
 
-				*out_handle = new (env()->heap()) Fs_vfs_handle(*this, vfs_mode, file);
-				return OPEN_OK;
+				*out_handle = new (alloc) Fs_vfs_handle(*this, alloc, vfs_mode, file);
 			}
-			catch (::File_system::Permission_denied)   { return OPEN_ERR_NO_PERM; }
-			catch (::File_system::Invalid_handle)      { return OPEN_ERR_NO_PERM; }
-			catch (::File_system::Lookup_failed)       { return OPEN_ERR_UNACCESSIBLE; }
-			catch (::File_system::Node_already_exists) { return OPEN_ERR_EXISTS; }
+			catch (::File_system::Lookup_failed)       { return OPEN_ERR_UNACCESSIBLE;  }
+			catch (::File_system::Permission_denied)   { return OPEN_ERR_NO_PERM;       }
+			catch (::File_system::Invalid_handle)      { return OPEN_ERR_UNACCESSIBLE;  }
+			catch (::File_system::Node_already_exists) { return OPEN_ERR_EXISTS;        }
+			catch (::File_system::Invalid_name)        { return OPEN_ERR_NAME_TOO_LONG; }
+			catch (::File_system::Name_too_long)       { return OPEN_ERR_NAME_TOO_LONG; }
+			catch (::File_system::No_space)            { return OPEN_ERR_NO_SPACE;      }
+			catch (::File_system::Out_of_metadata)     { return OPEN_ERR_NO_PERM;       }
 
-			return OPEN_ERR_UNACCESSIBLE;
+			return OPEN_OK;
+		}
+
+		void close(Vfs_handle *vfs_handle) override
+		{
+			if (!vfs_handle) return;
+
+			Lock::Guard guard(_lock);
+
+			Fs_vfs_handle *fs_handle = static_cast<Fs_vfs_handle *>(vfs_handle);
+
+			if (fs_handle) {
+				_fs.close(fs_handle->file_handle());
+				destroy(fs_handle->alloc(), fs_handle);
+			}
 		}
 
 
@@ -572,9 +577,13 @@ class Vfs::Fs_file_system : public File_system
 
 		static char const *name() { return "fs"; }
 
-		void sync() override
+		void sync(char const *path) override
 		{
-			_fs.sync();
+			try {
+				::File_system::Node_handle node = _fs.node(path);
+				_fs.sync(node);
+				_fs.close(node);
+			} catch (...) { }
 		}
 
 
@@ -620,9 +629,10 @@ class Vfs::Fs_file_system : public File_system
 
 			try {
 				_fs.truncate(handle->file_handle(), len);
-			} 
+			}
 			catch (::File_system::Invalid_handle)    { return FTRUNCATE_ERR_NO_PERM; }
 			catch (::File_system::Permission_denied) { return FTRUNCATE_ERR_NO_PERM; }
+			catch (::File_system::No_space)          { return FTRUNCATE_ERR_NO_SPACE; }
 
 			return FTRUNCATE_OK;
 		}

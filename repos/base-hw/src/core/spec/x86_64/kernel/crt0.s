@@ -91,23 +91,13 @@
 	leaq _stack_high@GOTPCREL(%rip),%rax
 	movq (%rax), %rsp
 
-	/* uniprocessor kernel-initialization which activates multiprocessor */
-	call init_kernel_up
+	movq __initial_bx@GOTPCREL(%rip),%rax
+	movq %rbx, (%rax)
 
-	/*********************************************
-	 ** Startup code that is common to all CPUs **
-	 *********************************************/
+	/* kernel-initialization */
+	call init_kernel
 
-	.global _start_secondary_cpus
-	_start_secondary_cpus:
-
-	/* do multiprocessor kernel-initialization */
-	call init_kernel_mp
-
-	/* call the kernel main-routine */
-	call kernel
-
-	/* catch erroneous return of the kernel main-routine */
+	/* catch erroneous return of the kernel initialization */
 	1: jmp 1b
 
 
@@ -121,3 +111,6 @@
 	.p2align 8
 	.space 32 * 1024
 	_stack_high:
+	.globl __initial_bx
+	__initial_bx:
+	.space 8

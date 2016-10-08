@@ -5,14 +5,11 @@
  */
 
 /*
- * Copyright (C) 2013 Genode Labs GmbH
+ * Copyright (C) 2013-2016 Genode Labs GmbH
  *
  * This file is distributed under the terms of the GNU General Public License
  * version 2.
  */
-
-/* Genode includes */
-#include <base/printf.h>
 
 /* VirtualBox includes */
 #include <VBoxDD.h>
@@ -33,6 +30,7 @@ extern "C" int VBoxDriversRegister(PCPDMDRVREGCB pCallbacks, uint32_t u32Version
 		&g_DrvVD,
 		&g_DrvHostInterface,
 		&g_DrvVUSBRootHub,
+		&g_DrvAUDIO,
 		0
 	};
 

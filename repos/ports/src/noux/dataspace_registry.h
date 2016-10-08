@@ -44,7 +44,7 @@ namespace Noux {
 			Dataspace_info(Dataspace_capability ds_cap)
 			:
 				Object_pool<Dataspace_info>::Entry(ds_cap),
-				_size(Dataspace_client(ds_cap).size()),
+				_size(ds_cap.valid() ? Dataspace_client(ds_cap).size() : 0),
 				_ds_cap(ds_cap)
 			{ }
 
@@ -106,24 +106,20 @@ namespace Noux {
 			virtual void poke(addr_t dst_offset, void const *src, size_t len) = 0;
 
 			/**
-			 * Return leaf RM session that covers a given address
+			 * Return leaf region map that covers a given address
 			 *
-			 * \param addr  address that is covered by the requested RM session
+			 * \param addr  address that is covered by the requested region map
 			 */
-			virtual Rm_session_capability lookup_rm_session(addr_t const addr)
+			virtual Capability<Region_map> lookup_region_map(addr_t const addr)
 			{
-				/* by default a dataspace is no sub RM, so return invalid */
-				return Rm_session_capability();
+				/* by default a dataspace is no sub region map, so return invalid */
+				return Capability<Region_map>();
 			}
 	};
 
 
-	class Dataspace_registry
+	class Dataspace_registry : public Object_pool<Dataspace_info>
 	{
-		private:
-
-			Object_pool<Dataspace_info> _pool;
-
 		public:
 
 			~Dataspace_registry()
@@ -136,25 +132,8 @@ namespace Noux {
 				 * created via 'Rm_dataspace_info::fork', are not handled by
 				 * those destructors. So we have to clean them up here.
 				 */
-				while(Dataspace_info *info = _pool.first()) {
-					_pool.remove_locked(info);
-					destroy(env()->heap(), info);
-				}
-			}
-
-			void insert(Dataspace_info *info)
-			{
-				_pool.insert(info);
-			}
-
-			void remove(Dataspace_info *info)
-			{
-				_pool.remove_locked(info);
-			}
-
-			Dataspace_info *lookup_info(Dataspace_capability ds_cap)
-			{
-				return _pool.lookup_and_lock(ds_cap);
+				remove_all([&] (Dataspace_info *info) {
+					destroy(env()->heap(), info); });
 			}
 	};
 
@@ -172,18 +151,17 @@ namespace Noux {
 
 		~Static_dataspace_info()
 		{
-			Static_dataspace_info *info =
-				dynamic_cast<Static_dataspace_info *>(_ds_registry.lookup_info(ds_cap()));
+			auto lambda = [this] (Static_dataspace_info *info) {
+				if (!info) {
+					error("lookup of binary ds info failed");
+					return;
+				}
 
-			if (!info) {
-				PERR("lookup of binary ds info failed");
-				return;
-			}
+				_ds_registry.remove(info);
 
-			_ds_registry.remove(info);
-
-			info->dissolve_users();
-
+				info->dissolve_users();
+			};
+			_ds_registry.apply(ds_cap(), lambda);
 		}
 
 		Dataspace_capability fork(Ram_session_capability,
@@ -195,7 +173,7 @@ namespace Noux {
 
 		void poke(addr_t dst_offset, void const *src, size_t len)
 		{
-			PERR("Attempt to poke onto a static dataspace");
+			error("attempt to poke onto a static dataspace");
 		}
 	};
 }

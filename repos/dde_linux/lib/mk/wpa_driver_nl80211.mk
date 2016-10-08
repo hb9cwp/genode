@@ -2,7 +2,7 @@ LIB_DIR     := $(REP_DIR)/src/lib/wpa_driver_nl80211
 LIB_INC_DIR := $(LIB_DIR)/include
 INC_DIR     += $(LIB_INC_DIR)
 
-LIBS += libc libnl
+LIBS += libc libnl libnl_include
 
 SHARED_LIB = yes
 LD_OPT += --version-script=$(LIB_DIR)/symbol.map
@@ -27,6 +27,7 @@ INC_DIR += $(WS_CONTRIB_DIR)/src/drivers \
 
 CC_OPT += -DCONFIG_DRIVER_NL80211
 CC_OPT += -DCONFIG_LIBNL20
+CC_OPT += -D_LINUX_SOCKET_H
 
 vpath %.c $(WS_CONTRIB_DIR)
 vpath %.cc $(LIB_DIR)

@@ -17,9 +17,18 @@
 #ifndef _BSD_EMUL_H_
 #define _BSD_EMUL_H_
 
-#ifdef __cplusplus
-extern "C" {
-#endif /* __cplusplus */
+#include <extern_c_begin.h>
+
+
+/*
+ * These emul specific functions are called by the OpenBSD
+ * audio framework if an play/record interrupt has occured
+ * (see patches/notify.patch).
+ */
+
+void notify_play();
+void notify_record();
+
 
 /*****************
  ** sys/types.h **
@@ -154,10 +163,17 @@ struct task { };
  ** sys/uio.h **
  ***************/
 
+enum uio_rw
+{
+	UIO_READ  = 0,
+	UIO_WRITE = 1,
+};
+
 struct uio
 {
 	off_t  uio_offset;
 	size_t uio_resid;
+	enum   uio_rw uio_rw;
 
 	/* emul specific fields */
 	void *buf;
@@ -282,7 +298,7 @@ void wakeup(const volatile void*);
 int tsleep(const volatile void *, int, const char *, int);
 int msleep(const volatile void *, struct mutex *, int,  const char*, int);
 
-int uiomovei(void *, int, struct uio *);
+int uiomove(void *, int, struct uio *);
 
 
 /*******************
@@ -663,8 +679,6 @@ int timeout_del(struct timeout *);
 #define htole32(x) ((uint32_t)(x))
 
 
-#ifdef __cplusplus
-}
-#endif /* __cplusplus */
+#include <extern_c_end.h>
 
 #endif /* _BSD_EMUL_H_ */

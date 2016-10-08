@@ -14,8 +14,9 @@
  */
 
 /* Genode includes */
-#include <base/printf.h>
+#include <base/log.h>
 #include <base/semaphore.h>
+#include <timer_session/connection.h>
 
 /* VirtualBox includes */
 #include <VBox/vmm/vm.h>
@@ -70,11 +71,11 @@ int SUPR3CallVMMR0Ex(PVMR0 pVMR0, VMCPUID idCpu, unsigned
 
 		case VMMR0_DO_GVMM_SCHED_POLL:
 			/* called by 'vmR3HaltGlobal1Halt' */
-			PDBG("SUPR3CallVMMR0Ex: VMMR0_DO_GVMM_SCHED_POLL");
+			Genode::log(__func__, ": SUPR3CallVMMR0Ex: VMMR0_DO_GVMM_SCHED_POLL");
 			return VINF_SUCCESS;
 
 		default:
-			PERR("SUPR3CallVMMR0Ex: unhandled uOperation %d", uOperation);
+			Genode::error("SUPR3CallVMMR0Ex: unhandled uOperation ", (int)uOperation);
 			return VERR_GENERAL_FAILURE;
 	}
 }
@@ -84,7 +85,8 @@ bool create_emt_vcpu(pthread_t * thread, size_t stack_size,
                      const pthread_attr_t *attr,
                      void *(*start_routine)(void *), void *arg,
                      Genode::Cpu_session * cpu_session,
-                     Genode::Affinity::Location location)
+                     Genode::Affinity::Location location,
+                     unsigned int cpu_id)
 {
 	/* no hardware acceleration support */
 	return false;
@@ -100,11 +102,38 @@ uint64_t genode_cpu_hz() {
 }
 
 
-bool Vmm_memory::revoke_from_vm(Region *r)
+void genode_update_tsc(void (*update_func)(void), unsigned long update_us)
 {
-	PWRN("%s unimplemented", __func__);
+	using namespace Genode;
+
+	Timer::Connection timer;
+	Signal_context    sig_ctx;
+	Signal_receiver   sig_rec;
+	Signal_context_capability sig_cap = sig_rec.manage(&sig_ctx);
+
+	timer.sigh(sig_cap);
+	timer.trigger_once(update_us);
+
+	for (;;) {
+		Signal s = sig_rec.wait_for_signal();
+		update_func();
+
+		timer.trigger_once(update_us);
+	}
+}
+
+
+HRESULT genode_setup_machine(ComObjPtr<Machine> machine)
+{
+	return genode_check_memory_config(machine);
+}
+
+
+bool Vmm_memory::revoke_from_vm(Mem_region *r)
+{
+	Genode::warning(__func__, " unimplemented");
 	return false;
 }
 
 
-extern "C" void pthread_yield() { PWRN("%s unimplemented", __func__); }
+extern "C" void pthread_yield() { Genode::warning(__func__, " unimplemented"); }

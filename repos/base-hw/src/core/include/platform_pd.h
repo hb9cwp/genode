@@ -40,7 +40,7 @@ namespace Genode
 {
 	class Platform_thread; /* forward declaration */
 
-	class Capability_space;
+	class Cap_space;
 
 	/**
 	 * Platform specific part of a Genode protection domain
@@ -59,7 +59,7 @@ class Hw::Address_space : public Genode::Address_space
 	private:
 
 		friend class Genode::Platform;
-		friend class Genode::Core_mem_allocator::Mapped_mem_allocator;
+		friend class Genode::Mapped_mem_allocator;
 
 		using Table_allocator =
 			Translation_table_allocator_tpl<DEFAULT_TRANSLATION_TABLE_MAX>;
@@ -128,7 +128,7 @@ class Hw::Address_space : public Genode::Address_space
 };
 
 
-class Genode::Capability_space
+class Genode::Cap_space
 {
 	private:
 
@@ -142,7 +142,7 @@ class Genode::Capability_space
 
 	public:
 
-		Capability_space();
+		Cap_space();
 
 		Cap_slab & capability_slab() { return _slab; }
 
@@ -151,7 +151,7 @@ class Genode::Capability_space
 
 
 class Genode::Platform_pd : public Hw::Address_space,
-                            public Genode::Capability_space,
+                            public Genode::Cap_space,
                             public Kernel_object<Kernel::Pd>
 {
 	private:
@@ -181,12 +181,14 @@ class Genode::Platform_pd : public Hw::Address_space,
 		Platform_pd(Allocator * md_alloc, char const *label);
 
 		/**
-		 * Bind thread 't' to protection domain
-		 *
-		 * \return  0  on success or
-		 *         -1  if failed
+		 * Destructor
 		 */
-		int bind_thread(Platform_thread * t);
+		~Platform_pd();
+
+		/**
+		 * Bind thread 't' to protection domain
+		 */
+		bool bind_thread(Platform_thread * t);
 
 		/**
 		 * Unbind thread 't' from protection domain
@@ -197,7 +199,7 @@ class Genode::Platform_pd : public Hw::Address_space,
 		/**
 		 * Assign parent interface to protection domain
 		 */
-		int assign_parent(Native_capability parent);
+		void assign_parent(Native_capability parent);
 
 
 		/***************
@@ -235,4 +237,3 @@ class Genode::Core_platform_pd : public Genode::Platform_pd
 };
 
 #endif /* _CORE__INCLUDE__PLATFORM_PD_H_ */
-

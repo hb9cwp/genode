@@ -27,6 +27,7 @@ namespace Launcher {
 	using Decorator::string_attribute;
 }
 
+
 /***************
  ** Utilities **
  ***************/
@@ -60,8 +61,9 @@ class Launcher::Subsystem_manager
 
 	private:
 
-		Server::Entrypoint &_ep;
-		Cap_session        &_cap;
+		Server::Entrypoint  &_ep;
+		Cap_session         &_cap;
+		Dataspace_capability _ldso_ds;
 
 		struct Child : Child_base, List<Child>::Element
 		{
@@ -73,7 +75,9 @@ class Launcher::Subsystem_manager
 			      Cap_session              &cap_session,
 			      size_t                    ram_quota,
 			      size_t                    ram_limit,
-			      Signal_context_capability yield_response_sig_cap)
+			      Signal_context_capability yield_response_sig_cap,
+			      Signal_context_capability exit_sig_cap,
+			      Dataspace_capability      ldso_ds)
 			:
 				Child_base(ram,
 				           label.string(),
@@ -81,7 +85,9 @@ class Launcher::Subsystem_manager
 				           cap_session,
 				           ram_quota,
 				           ram_limit,
-				           yield_response_sig_cap)
+				           yield_response_sig_cap,
+				           exit_sig_cap,
+				           ldso_ds)
 			{ }
 		};
 
@@ -139,6 +145,8 @@ class Launcher::Subsystem_manager
 			_try_response_to_resource_request();
 		}
 
+		Genode::Signal_context_capability _exited_child_sig_cap;
+
 		Ram _ram { ram_preservation_from_config(),
 		           _yield_broadcast_dispatcher,
 		           _resource_avail_dispatcher };
@@ -149,7 +157,7 @@ class Launcher::Subsystem_manager
 				return string_attribute(subsystem.sub_node("binary"),
 				                        "name", Child::Binary_name(""));
 			} catch (Xml_node::Nonexistent_sub_node) {
-				PERR("missing <binary> definition");
+				Genode::error("missing <binary> definition");
 				throw Invalid_config();
 			}
 		}
@@ -170,7 +178,7 @@ class Launcher::Subsystem_manager
 					}
 				});
 			} catch (...) {
-				PERR("invalid RAM resource declaration");
+				Genode::error("invalid RAM resource declaration");
 				throw Invalid_config();
 			}
 
@@ -179,9 +187,12 @@ class Launcher::Subsystem_manager
 
 	public:
 
-		Subsystem_manager(Server::Entrypoint &ep, Cap_session &cap)
+		Subsystem_manager(Server::Entrypoint &ep, Cap_session &cap,
+		                  Genode::Signal_context_capability exited_child_sig_cap,
+		                  Dataspace_capability ldso_ds)
 		:
-			_ep(ep), _cap(cap)
+			_ep(ep), _cap(cap), _ldso_ds(ldso_ds),
+			_exited_child_sig_cap(exited_child_sig_cap)
 		{ }
 
 		/**
@@ -193,18 +204,19 @@ class Launcher::Subsystem_manager
 		{
 			Child::Binary_name const binary_name = _binary_name(subsystem);
 
-			Child::Label const label = string_attribute(subsystem, "name",
-			                                            Child::Label(""));
+			Label const label = string_attribute(subsystem, "name",
+			                                            Label(""));
 
 			Ram_config const ram_config = _ram_config(subsystem);
 
-			PINF("starting child '%s'", label.string());
+			Genode::log("starting child '", label.string(), "'");
 
 			try {
 				Child *child = new (env()->heap())
 					Child(_ram, label, binary_name.string(), _cap,
 					      ram_config.quantum, ram_config.limit,
-					      _yield_broadcast_dispatcher);
+					      _yield_broadcast_dispatcher,
+					      _exited_child_sig_cap, _ldso_ds);
 
 				/* configure child */
 				try {
@@ -217,7 +229,7 @@ class Launcher::Subsystem_manager
 				child->start();
 
 			} catch (Rom_connection::Rom_connection_failed) {
-				PERR("binary \"%s\" is missing", binary_name.string());
+				Genode::error("binary \"", binary_name, "\" is missing");
 				throw Invalid_config();
 			}
 		}
@@ -225,11 +237,27 @@ class Launcher::Subsystem_manager
 		void kill(char const *label)
 		{
 			for (Child *c = _children.first(); c; c = c->next()) {
-				if (c->label() == Child::Label(label)) {
+				if (c->label() == Label(label)) {
 					_children.remove(c);
 					destroy(env()->heap(), c);
 					return;
 				}
+			}
+		}
+
+		/**
+		 * Call functor for each exited child
+		 *
+		 * The functor takes a 'Label' as argument.
+		 */
+		template <typename FUNC>
+		void for_each_exited_child(FUNC const &func)
+		{
+			Child *next = nullptr;
+			for (Child *child = _children.first(); child; child = next) {
+				next = child->next();
+				if (child->exited())
+					func(Label(child->label().string()));
 			}
 		}
 };

@@ -1,4 +1,4 @@
-build {
+set build_components {
 	core init
 	drivers/timer
 	server/nitpicker server/nit_fb
@@ -7,6 +7,11 @@ build {
 	drivers/framebuffer drivers/input
 	lib/gallium
 }
+
+source ${genode_dir}/repos/base/run/platform_drv.inc
+append_platform_drv_build_components
+
+build $build_components
 
 create_boot_directory
 
@@ -18,12 +23,10 @@ set config {
 		<service name="IRQ"/>
 		<service name="IO_MEM"/>
 		<service name="IO_PORT"/>
-		<service name="CAP"/>
 		<service name="PD"/>
 		<service name="RM"/>
 		<service name="CPU"/>
 		<service name="LOG"/>
-		<service name="SIGNAL"/>
 	</parent-provides>
 	<default-route>
 		<any-service> <parent/> <any-child/> </any-service>
@@ -62,10 +65,10 @@ append config {
 		<resource name="RAM" quantum="1M"/>
 		<provides><service name="Nitpicker"/></provides>
 		<config>
-			<domain name="pointer" layer="1" xray="no" origin="pointer" />
-			<domain name=""        layer="2" />
+			<domain name="pointer" layer="1" content="client" label="no" origin="pointer" />
+			<domain name="default" layer="2" content="client" focus="click" hover="always" />
 			<policy label="pointer" domain="pointer"/>
-			<policy label=""        domain=""/>
+			<default-policy domain="default"/>
 		</config>
 		<route><any-service><parent/><any-child/></any-service></route>
 	</start>
@@ -83,13 +86,11 @@ append config {
 						<service name="IRQ"/>
 						<service name="IO_MEM"/>
 						<service name="IO_PORT"/>
-						<service name="CAP"/>
 						<service name="PD"/>
 						<service name="RM"/>
 						<service name="CPU"/>
 						<service name="LOG"/>
 						<service name="Platform"/>
-						<service name="SIGNAL"/>
 						<service name="Nitpicker"/>
 						<service name="Timer"/>
 					</parent-provides>

@@ -18,11 +18,11 @@
 #define _INCLUDE__ROOT__COMPONENT_H_
 
 #include <root/root.h>
+#include <base/allocator.h>
 #include <base/rpc_server.h>
-#include <base/heap.h>
-#include <ram_session/ram_session.h>
+#include <base/entrypoint.h>
 #include <util/arg_string.h>
-#include <base/printf.h>
+#include <base/log.h>
 
 namespace Genode {
 
@@ -186,13 +186,26 @@ class Genode::Root_component : public Rpc_object<Typed_root<SESSION_TYPE> >,
 		/**
 		 * Constructor
 		 *
-		 * \param ep           entry point that manages the sessions of this
-		 *                     root interface.
-		 * \param ram_session  provider of dataspaces for the backing store
-		 *                     of session objects and session data
+		 * \param ep        entry point that manages the sessions of this
+		 *                  root interface
+		 * \param md_alloc  meta-data allocator providing the backing store
+		 *                  for session objects
 		 */
-		Root_component(Rpc_entrypoint *ep, Allocator *metadata_alloc)
-		: _ep(ep), _md_alloc(metadata_alloc) { }
+		Root_component(Entrypoint &ep, Allocator &md_alloc)
+		:
+			_ep(&ep.rpc_ep()), _md_alloc(&md_alloc)
+		{ }
+
+		/**
+		 * Constructor
+		 *
+		 * \deprecated  use the constructor with the 'Entrypoint &'
+		 *              argument instead
+		 */
+		Root_component(Rpc_entrypoint *ep, Allocator *md_alloc)
+		:
+			_ep(ep), _md_alloc(md_alloc)
+		{ }
 
 
 		/********************
@@ -202,7 +215,7 @@ class Genode::Root_component : public Rpc_object<Typed_root<SESSION_TYPE> >,
 		Session_capability session(Root::Session_args const &args,
 		                           Affinity           const &affinity) override
 		{
-			if (!args.is_valid_string()) throw Root::Invalid_args();
+			if (!args.valid_string()) throw Root::Invalid_args();
 
 			POLICY::aquire(args.string());
 
@@ -214,8 +227,8 @@ class Genode::Root_component : public Rpc_object<Typed_root<SESSION_TYPE> >,
 			size_t needed = sizeof(SESSION_TYPE) + md_alloc()->overhead(sizeof(SESSION_TYPE));
 
 			if (needed > ram_quota) {
-				PERR("Insufficient ram quota, provided=%zu, required=%zu",
-				     ram_quota, needed);
+				error("Insufficient ram quota, provided=", ram_quota,
+				      ", required=", needed);
 				throw Root::Quota_exceeded();
 			}
 
@@ -239,35 +252,38 @@ class Genode::Root_component : public Rpc_object<Typed_root<SESSION_TYPE> >,
 
 			SESSION_TYPE *s = 0;
 			try { s = _create_session(adjusted_args, affinity); }
-			catch (Allocator::Out_of_memory) { throw Root::Quota_exceeded(); }
+			catch (Allocator::Out_of_memory) { throw Root::Unavailable(); }
 
 			return _ep->manage(s);
 		}
 
 		void upgrade(Session_capability session, Root::Upgrade_args const &args) override
 		{
-			if (!args.is_valid_string()) throw Root::Invalid_args();
+			if (!args.valid_string()) throw Root::Invalid_args();
 
-			typedef typename Object_pool<SESSION_TYPE>::Guard Object_guard;
-			Object_guard s(_ep->lookup_and_lock(session));
-			if (!s) return;
+			_ep->apply(session, [&] (SESSION_TYPE *s) {
+				if (!s) return;
 
-			_upgrade_session(s, args.string());
+				_upgrade_session(s, args.string());
+			});
 		}
 
-		void close(Session_capability session) override
+		void close(Session_capability session_cap) override
 		{
-			SESSION_TYPE * s =
-				dynamic_cast<SESSION_TYPE *>(_ep->lookup_and_lock(session));
-			if (!s) return;
+			SESSION_TYPE * session;
 
-			/* let the entry point forget the session object */
-			_ep->dissolve(s);
+			_ep->apply(session_cap, [&] (SESSION_TYPE *s) {
+				session = s;
 
-			_destroy_session(s);
+				/* let the entry point forget the session object */
+				if (session) _ep->dissolve(session);
+			});
+
+			if (!session) return;
+
+			_destroy_session(session);
 
 			POLICY::release();
-			return;
 		}
 };
 

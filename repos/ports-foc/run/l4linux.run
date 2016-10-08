@@ -12,12 +12,15 @@ set build_components {
 	drivers/framebuffer
 	l4linux }
 
-set use_usb_driver   [expr [have_spec omap4] || [have_spec platform_arndale]]
+set use_usb_driver   [expr [have_spec omap4] || [have_spec arndale]]
 set use_nic_driver   [expr !$use_usb_driver && [expr [have_spec lan9118] || [have_spec x86]]]
+
+if {[expr !$use_usb_driver && !$use_nic_driver]} {
+	puts "\n Run script is not supported on this platform. \n"; exit 0 }
 
 lappend_if $use_usb_driver  build_components drivers/usb
 lappend_if $use_nic_driver  build_components drivers/nic
-lappend_if [have_spec  ps2] build_components drivers/input/ps2
+lappend_if [have_spec  ps2] build_components drivers/input/spec/ps2
 lappend_if [have_spec gpio] build_components drivers/gpio
 
 source ${genode_dir}/repos/base/run/platform_drv.inc
@@ -38,12 +41,10 @@ set config  {
 		<service name="IRQ"/>
 		<service name="IO_MEM"/>
 		<service name="IO_PORT"/>
-		<service name="CAP"/>
 		<service name="PD"/>
 		<service name="RM"/>
 		<service name="CPU"/>
 		<service name="LOG"/>
-		<service name="SIGNAL"/>
 	</parent-provides>
 	<default-route>
 		<any-service> <parent/> <any-child/> </any-service>
@@ -97,7 +98,7 @@ append_if $use_usb_driver config {
 
 append_if $use_nic_driver config {
 	<start name="nic_drv">
-		<resource name="RAM" quantum="2M"/>
+		<resource name="RAM" quantum="3M"/>
 		<provides><service name="Nic"/></provides>
 	</start> }
 
@@ -148,7 +149,7 @@ build_boot_image  [join $boot_modules " "]
 #
 # Qemu
 #
-append qemu_args " -m 128 -nographic "
+append qemu_args " -m 160 -nographic "
 append qemu_args " -serial mon:stdio "
 append_if [have_spec     x86] qemu_args " -smp 2,cores=2 "
 append_if [have_spec     x86] qemu_args " -net nic,model=e1000 -net user "

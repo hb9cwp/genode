@@ -14,28 +14,33 @@
  * under the terms of the GNU General Public License version 2.
  */
 
-#ifndef _INCLUDE__BASE__SIGNAL_H__
-#define _INCLUDE__BASE__SIGNAL_H__
+#ifndef _INCLUDE__BASE__SIGNAL_H_
+#define _INCLUDE__BASE__SIGNAL_H_
 
 #include <util/noncopyable.h>
 #include <util/list.h>
 #include <base/semaphore.h>
-#include <signal_session/signal_session.h>
+#include <base/capability.h>
 
 /* only needed for base-hw */
 namespace Kernel { struct Signal_receiver; }
 
 namespace Genode {
 
+	class Entrypoint;
 	class Signal_source;
+
 	class Signal_receiver;
 	class Signal_context;
 	class Signal_context_registry;
 	class Signal_transmitter;
 	class Signal;
 	class Signal_dispatcher_base;
-	class Signal_connection;
-	template <typename> class Signal_dispatcher;
+
+	template <typename>           class Signal_dispatcher;
+	template <typename, typename> class Signal_handler;
+
+	typedef Capability<Signal_context> Signal_context_capability;
 }
 
 
@@ -128,8 +133,6 @@ class Genode::Signal_transmitter
 
 		Signal_context_capability _context;  /* destination */
 
-		Signal_connection * connection();
-
 	public:
 
 		/**
@@ -178,7 +181,7 @@ class Genode::Signal_receiver : Noncopyable
 		 * Provides the kernel-object name via the 'dst' method. This is
 		 * needed for 'base-hw' only.
 		 */
-		Signal_receiver_capability _cap;
+		Capability<Signal_source> _cap;
 
 		/**
 		 * List of associated contexts
@@ -200,6 +203,12 @@ class Genode::Signal_receiver : Noncopyable
 		 */
 		void _platform_destructor();
 
+		/**
+		 * Hooks to platform specific dissolve parts
+		 */
+		void _platform_begin_dissolve(Signal_context * const c);
+		void _platform_finish_dissolve(Signal_context * const c);
+
 	public:
 
 		/**
@@ -207,6 +216,7 @@ class Genode::Signal_receiver : Noncopyable
 		 */
 		class Context_already_in_use { };
 		class Context_not_associated { };
+		class Signal_not_pending     { };
 
 		/**
 		 * Constructor
@@ -243,11 +253,24 @@ class Genode::Signal_receiver : Noncopyable
 		bool pending();
 
 		/**
-		 * Block until a signal is received
+		 * Block until a signal is received and return the signal
 		 *
 		 * \return received signal
 		 */
 		Signal wait_for_signal();
+
+		/**
+		 * Block until a signal is received
+		 */
+		void block_for_signal();
+
+		/**
+		 * Retrieve  pending signal
+		 *
+		 * \throw   'Signal_not_pending' no pending signal found
+		 * \return  received signal
+		 */
+		Signal pending_signal();
 
 		/**
 		 * Locally submit signal to the receiver
@@ -265,7 +288,7 @@ class Genode::Signal_receiver : Noncopyable
 		 * source associated with the process. It must not be used for other
 		 * purposes.
 		 */
-		static void dispatch_signals(Signal_source *signal_source);
+		static void dispatch_signals(Signal_source *);
 };
 
 
@@ -411,4 +434,43 @@ class Genode::Signal_dispatcher : public Signal_dispatcher_base,
 		void dispatch(unsigned num) { (obj.*member)(num); }
 };
 
-#endif /* _INCLUDE__BASE__SIGNAL_H__ */
+
+/**
+ * Signal dispatcher for handling signals by an object method
+ *
+ * This utility associates an object method with signals. It is intended to
+ * be used as a member variable of the class that handles incoming signals
+ * of a certain type. The constructor takes a pointer-to-member to the
+ * signal-handling method as argument.
+ *
+ * \param T  type of signal-handling class
+ * \param EP type of entrypoint handling signal RPC
+ */
+template <typename T, typename EP = Genode::Entrypoint>
+struct Genode::Signal_handler : Genode::Signal_dispatcher_base,
+                                Genode::Signal_context_capability
+{
+	EP &ep;
+	T  &obj;
+	void (T::*member) ();
+
+	/**
+	 * Constructor
+	 *
+	 * \param ep          entrypoint managing this signal RPC
+	 * \param obj,member  object and method to call when
+	 *                    the signal occurs
+	 */
+	Signal_handler(EP &ep, T &obj, void (T::*member)())
+	: Signal_context_capability(ep.manage(*this)),
+	  ep(ep), obj(obj), member(member) { }
+
+	~Signal_handler() { ep.dissolve(*this); }
+
+	/**
+	 * Interface of Signal_dispatcher_base
+	 */
+	void dispatch(unsigned num) { (obj.*member)(); }
+};
+
+#endif /* _INCLUDE__BASE__SIGNAL_H_ */

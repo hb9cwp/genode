@@ -11,7 +11,7 @@
  * version 2.
  */
 
-#include <base/printf.h>
+#include <base/log.h>
 
 #include <iprt/assert.h>
 
@@ -19,12 +19,10 @@ extern "C" {
 
 #define DUMMY(name) \
 void name(void) { \
-	PDBG( #name " called, not implemented, eip=%p", \
-	     __builtin_return_address(0)); \
+	Genode::warning(__func__, ": " #name " called, not implemented, eip=", \
+	                __builtin_return_address(0)); \
 	while (1) { Assert(!"not implemented"); } \
 }
-
-DUMMY(RTErrCOMGet)
 
 DUMMY(DBGFR3CoreWrite)
 DUMMY(DBGCRegisterCommands)
@@ -79,7 +77,6 @@ DUMMY(PGMR3LockCall)
 DUMMY(PGMR3PoolGrow)
 DUMMY(PGMR3QueryGlobalMemoryStats)
 DUMMY(PGMR3QueryMemoryStats)
-DUMMY(PGMR3ResetCpu)
 
 DUMMY(PGMR3PhysAllocateHandyPages)
 DUMMY(PGMR3PhysAllocateLargeHandyPage)
@@ -123,6 +120,8 @@ DUMMY(RTPathAppend)
 DUMMY(RTPathChangeToDosSlashes)
 DUMMY(RTSemEventWaitEx)
 
+DUMMY(RTMemDupExTag)
+DUMMY(RTMemDupTag)
 DUMMY(RTMemExecFree)
 
 DUMMY(SELMR3GetSelectorInfo)
@@ -179,7 +178,7 @@ DUMMY(RTStrCatP)
 DUMMY(RTStrStr)
 
 DUMMY(RTTcpClientCloseEx)
-DUMMY(RTTcpClientConnect)
+DUMMY(RTTcpClientConnectEx)
 DUMMY(RTTcpFlush)
 DUMMY(RTTcpGetLocalAddress)
 DUMMY(RTTcpGetPeerAddress)

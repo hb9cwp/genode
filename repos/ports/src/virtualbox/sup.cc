@@ -26,6 +26,9 @@
 #include <iprt/uint128.h>
 #include <VBox/err.h>
 
+/* libc memory allocator */
+#include <libc_mem_alloc.h>
+
 
 struct Attached_gip : Genode::Attached_ram_dataspace
 {
@@ -36,8 +39,7 @@ struct Attached_gip : Genode::Attached_ram_dataspace
 
 
 enum {
-	UPDATE_HZ  = 100,                     /* Hz */
-	/* Note: UPDATE_MS < 10ms is not supported by alarm timer, take care !*/
+	UPDATE_HZ  = 1000,
 	UPDATE_MS  = 1000 / UPDATE_HZ,
 	UPDATE_NS  = UPDATE_MS * 1000 * 1000,
 };
@@ -46,9 +48,11 @@ enum {
 PSUPGLOBALINFOPAGE g_pSUPGlobalInfoPage;
 
 
-class Periodic_GIP : public Genode::Alarm {
+struct Periodic_gip : public Genode::Thread_deprecated<2*4096>
+{
+	Periodic_gip() : Thread_deprecated("periodic_gip") { start(); }
 
-	bool on_alarm(unsigned) override
+	static void update()
 	{
 		/**
 		 * We're using rdtsc here since timer_session->elapsed_ms produces
@@ -95,11 +99,10 @@ class Periodic_GIP : public Genode::Alarm {
 		 * read struct SUPGIPCPU description for more details.
 		 */
 		ASMAtomicIncU32(&cpu->u32TransactionId);
-
-		return true;
 	}
-};
 
+	void entry() override { genode_update_tsc(update, UPDATE_MS * 1000); }
+};
 
 
 int SUPR3Init(PSUPDRVSESSION *ppSession)
@@ -146,8 +149,7 @@ int SUPR3Init(PSUPDRVSESSION *ppSession)
 	cpu->idApic                  = 0;
 
 	/* schedule periodic call of GIP update function */
-	static Periodic_GIP alarm;
-	Genode::Timeout_thread::alarm_timer()->schedule(&alarm, UPDATE_MS);
+	static Periodic_gip periodic_gip;
 
 	initialized = true;
 
@@ -202,7 +204,7 @@ int SUPSemEventSignal(PSUPDRVSESSION pSession, SUPSEMEVENT hEvent)
 	if (hEvent)
 		reinterpret_cast<Genode::Semaphore *>(hEvent)->up();
 	else
-		PERR("%s called - not implemented", __FUNCTION__);
+		Genode::error(__FUNCTION__, " called - not implemented");
 
 	return VINF_SUCCESS;	
 }
@@ -214,7 +216,8 @@ int SUPSemEventWaitNoResume(PSUPDRVSESSION pSession, SUPSEMEVENT hEvent,
 	if (hEvent && cMillies == RT_INDEFINITE_WAIT)
 		reinterpret_cast<Genode::Semaphore *>(hEvent)->down();
 	else {
-		PERR("%s called millis=%u - not implemented", __FUNCTION__, cMillies);
+		Genode::error(__FUNCTION__, " called millis=", cMillies,
+		              " - not implemented");
 		reinterpret_cast<Genode::Semaphore *>(hEvent)->down();
 	}
 
@@ -253,15 +256,15 @@ int SUPR3CallVMMR0(PVMR0 pVMR0, VMCPUID idCpu, unsigned uOperation,
                    void *pvArg)
 {
 	if (uOperation == VMMR0_DO_CALL_HYPERVISOR) {
-		PDBG("VMMR0_DO_CALL_HYPERVISOR - doing nothing");
+		Genode::log(__func__, ": VMMR0_DO_CALL_HYPERVISOR - doing nothing");
 		return VINF_SUCCESS;
 	}
 	if (uOperation == VMMR0_DO_VMMR0_TERM) {
-		PDBG("VMMR0_DO_VMMR0_TERM - doing nothing");
+		Genode::log(__func__, ": VMMR0_DO_VMMR0_TERM - doing nothing");
 		return VINF_SUCCESS;
 	}
 	if (uOperation == VMMR0_DO_GVMM_DESTROY_VM) {
-		PDBG("VMMR0_DO_GVMM_DESTROY_VM - doing nothing");
+		Genode::log(__func__, ": VMMR0_DO_GVMM_DESTROY_VM - doing nothing");
 		return VINF_SUCCESS;
 	}
 
@@ -270,4 +273,88 @@ int SUPR3CallVMMR0(PVMR0 pVMR0, VMCPUID idCpu, unsigned uOperation,
 	          uOperation != VMMR0_DO_GVMM_DESTROY_VM,
 	          ("SUPR3CallVMMR0Ex: unhandled uOperation %d", uOperation));
 	return VERR_GENERAL_FAILURE;
+}
+
+
+void genode_VMMR0_DO_GVMM_CREATE_VM(PSUPVMMR0REQHDR pReqHdr)
+{
+	GVMMCREATEVMREQ &req = reinterpret_cast<GVMMCREATEVMREQ &>(*pReqHdr);
+
+	size_t const cCpus = req.cCpus;
+
+	/*
+	 * Allocate and initialize VM struct
+	 *
+	 * The VM struct is followed by the variable-sizedA array of VMCPU
+	 * objects. 'RT_UOFFSETOF' is used to determine the size including
+	 * the VMCPU array.
+	 *
+	 * VM struct must be page-aligned, which is checked at least in
+	 * PDMR3CritSectGetNop().
+	 */
+	size_t const cbVM = RT_UOFFSETOF(VM, aCpus[cCpus]);
+	VM *pVM = (VM *)Libc::mem_alloc()->alloc(cbVM, Genode::log2(PAGE_SIZE));
+	Genode::memset(pVM, 0, cbVM);
+
+	/*
+	 * On Genode, VMMR0 and VMMR3 share a single address space. Hence, the
+	 * same pVM pointer is valid as pVMR0 and pVMR3.
+	 */
+	pVM->enmVMState       = VMSTATE_CREATING;
+	pVM->pVMR0            = (RTHCUINTPTR)pVM;
+	pVM->pVMRC            = (RTGCUINTPTR)pVM;
+	pVM->pSession         = req.pSession;
+	pVM->cbSelf           = cbVM;
+	pVM->cCpus            = cCpus;
+	pVM->uCpuExecutionCap = 100;  /* expected by 'vmR3CreateU()' */
+	pVM->offVMCPU         = RT_UOFFSETOF(VM, aCpus);
+
+	for (uint32_t i = 0; i < cCpus; i++) {
+		pVM->aCpus[i].pVMR0           = pVM->pVMR0;
+		pVM->aCpus[i].pVMR3           = pVM;
+		pVM->aCpus[i].idHostCpu       = NIL_RTCPUID;
+		pVM->aCpus[i].hNativeThreadR0 = NIL_RTNATIVETHREAD;
+	}
+
+	pVM->aCpus[0].hNativeThreadR0 = RTThreadNativeSelf();
+
+	/* out parameters of the request */
+	req.pVMR0 = pVM->pVMR0;
+	req.pVMR3 = pVM;
+}
+
+
+void genode_VMMR0_DO_GVMM_REGISTER_VMCPU(PVMR0 pVMR0, VMCPUID idCpu)
+{
+	PVM pVM = reinterpret_cast<PVM>(pVMR0);
+	pVM->aCpus[idCpu].hNativeThreadR0 = RTThreadNativeSelf();
+}
+
+
+HRESULT genode_check_memory_config(ComObjPtr<Machine> machine)
+{
+	HRESULT rc;
+
+	/* Validate configured memory of vbox file and Genode config */
+	ULONG memory_vbox;
+	rc = machine->COMGETTER(MemorySize)(&memory_vbox);
+	if (FAILED(rc))
+		return rc;
+
+	/* Request max available memory */
+	size_t memory_genode = Genode::env()->ram_session()->avail() >> 20;
+	size_t memory_vmm    = 28;
+
+	if (memory_vbox + memory_vmm > memory_genode) {
+		using Genode::error;
+		error("Configured memory ", memory_vmm, " MB (vbox file) is insufficient.");
+		error(memory_genode,              " MB (1) - ",
+		      memory_vmm,                 " MB (2) = ",
+		      memory_genode - memory_vmm, " MB (3)");
+		error("(1) available memory based defined by Genode config");
+		error("(2) minimum memory required for VBox VMM");
+		error("(3) maximal available memory to VM");
+		return E_FAIL;
+	}
+	return S_OK;
 }

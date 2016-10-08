@@ -11,8 +11,8 @@
  * under the terms of the GNU General Public License version 2.
  */
 
-#ifndef _PIC_H_
-#define _PIC_H_
+#ifndef _CORE__INCLUDE__SPEC__IMX53__PIC_H_
+#define _CORE__INCLUDE__SPEC__IMX53__PIC_H_
 
 /* Genode includes */
 #include <util/mmio.h>
@@ -42,6 +42,12 @@ class Genode::Pic : public Mmio
 		};
 
 	protected:
+
+		/**
+		 * Software Interrupt Trigger Register
+		 */
+		struct Swint : Register<0xf00, 32> {
+			struct Intid  : Bitfield<0,10> { }; };
 
 		/**
 		 * Interrupt control register
@@ -154,6 +160,13 @@ class Genode::Pic : public Mmio
 			if (valid(i)) { write<Enclear::Clear_enable>(1, i); } }
 
 
+		/*
+		 * Trigger interrupt 'i' from software if possible
+		 */
+		void trigger(unsigned const i) {
+			write<Swint>(Swint::Intid::bits(i)); }
+
+
 		/*************
 		 ** Dummies **
 		 *************/
@@ -165,4 +178,4 @@ class Genode::Pic : public Mmio
 
 namespace Kernel { class Pic : public Genode::Pic { }; }
 
-#endif /* _PIC_H_ */
+#endif /* _CORE__INCLUDE__SPEC__IMX53__PIC_H_ */

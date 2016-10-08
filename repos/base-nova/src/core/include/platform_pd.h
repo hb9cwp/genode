@@ -34,6 +34,7 @@ namespace Genode {
 			Native_capability _parent;
 			int               _thread_cnt;
 			addr_t            _pd_sel;
+			const char *      _label;
 
 		public:
 
@@ -50,11 +51,8 @@ namespace Genode {
 
 			/**
 			 * Bind thread to protection domain
-			 *
-			 * \return  0  on success or
-			 *         -1  if thread ID allocation failed.
 			 */
-			int bind_thread(Platform_thread *thread);
+			bool bind_thread(Platform_thread *thread);
 
 			/**
 			 * Unbind thread from protection domain
@@ -66,7 +64,7 @@ namespace Genode {
 			/**
 			 * Assign parent interface to protection domain
 			 */
-			int assign_parent(Native_capability parent);
+			void assign_parent(Native_capability parent);
 
 			/**
 			 * Return portal capability selector for parent interface
@@ -83,7 +81,7 @@ namespace Genode {
 			 *
 			 * \return PD selector
 			 */
-			addr_t pd_sel() { return _pd_sel; }
+			addr_t pd_sel() const { return _pd_sel; }
 
 			/**
 			 * Capability selector of core protection domain
@@ -93,15 +91,18 @@ namespace Genode {
 			static addr_t pd_core_sel() { return __core_pd_sel; }
 
 
+			/**
+			 * Label of this protection domain
+			 *
+			 * \return name of this protection domain
+			 */
+			const char * name() const { return _label; }
+
 			/*****************************
 			 ** Address-space interface **
 			 *****************************/
 
-			/*
-			 * On NOVA, we don't use directed unmap but rely on the
-			 * in-kernel mapping database. See 'rm_session_support.cc'.
-			 */
-			void flush(addr_t, size_t) { PDBG("not implemented"); }
+			void flush(addr_t, size_t);
 	};
 }
 

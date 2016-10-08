@@ -13,7 +13,7 @@
  */
 
 #include <base/env.h>
-#include <base/printf.h>
+#include <base/log.h>
 
 #define LWIP_COMPAT_SOCKETS 0
 
@@ -51,8 +51,9 @@ static inline void lwip_FD_SET(int lwip_fd, lwip_fd_set *set)
 	FD_SET(lwip_fd, set);
 }
 
-static const long lwip_FIONBIO = FIONBIO;
-static const long lwip_FIONREAD = FIONREAD;
+static constexpr long lwip_FIONBIO = FIONBIO;
+static constexpr long lwip_FIONREAD = FIONREAD;
+static constexpr int  lwip_O_NONBLOCK = O_NONBLOCK;
 
 /* undefine lwip type names that are also defined in libc headers and have
  * been renamed to lwip_*() */
@@ -65,6 +66,7 @@ static const long lwip_FIONREAD = FIONREAD;
 
 /* undefine lwip macros that are also defined in libc headers and cannot be
  * renamed */
+#undef AF_INET6
 #undef BIG_ENDIAN
 #undef BYTE_ORDER
 #undef FD_CLR
@@ -73,6 +75,8 @@ static const long lwip_FIONREAD = FIONREAD;
 #undef FD_ZERO
 #undef FIONBIO
 #undef FIONREAD
+#undef O_NDELAY
+#undef O_NONBLOCK
 #undef HOST_NOT_FOUND
 #undef IOCPARM_MASK
 #undef IOC_VOID
@@ -110,6 +114,7 @@ static const long lwip_FIONREAD = FIONREAD;
 
 #include <assert.h>
 #include <sys/ioctl.h>
+#include <sys/fcntl.h>
 
 
 namespace {
@@ -216,7 +221,7 @@ struct Plugin : Libc::Plugin
 
 Plugin::Plugin()
 {
-	PDBG("using the lwIP libc plugin\n");
+	Genode::log("using the lwIP libc plugin");
 
 	lwip_tcpip_init();
 }
@@ -280,7 +285,7 @@ Libc::File_descriptor *Plugin::accept(Libc::File_descriptor *sockfdo,
 	Libc::File_descriptor *fd = Libc::file_descriptor_allocator()->alloc(this, context);
 
 	if (!fd)
-		PERR("could not allocate file descriptor");
+		Genode::error("could not allocate file descriptor");
 
 	return fd;
 }
@@ -320,15 +325,20 @@ int Plugin::fcntl(Libc::File_descriptor *sockfdo, int cmd, long val)
 
 	switch (cmd) {
 	case F_GETFL:
+		/* lwip_fcntl() supports only the 'O_NONBLOCK' flag */
+		result = lwip_fcntl(s, cmd, val);
+		if (result == lwip_O_NONBLOCK)
+			result = O_NONBLOCK;
+		break;
 	case F_SETFL:
 		/*
-                 * lwip_fcntl() supports only the 'O_NONBLOCK' flag and only if
-                 * no other flag is set.
-                 */
-		result = lwip_fcntl(s, cmd, val & O_NONBLOCK);
+		 * lwip_fcntl() supports only the 'O_NONBLOCK' flag and only if
+		 * no other flag is set.
+		 */
+		result = lwip_fcntl(s, cmd, (val & O_NONBLOCK) ? lwip_O_NONBLOCK : 0);
 		break;
 	default:
-		PERR("unsupported fcntl() request: %d", cmd);
+		Genode::error("libc_lwip: unsupported fcntl() request: ", cmd);
 		break;
 	}
 
@@ -381,16 +391,16 @@ int Plugin::getsockopt(Libc::File_descriptor *sockfdo, int level,
 int Plugin::ioctl(Libc::File_descriptor *sockfdo, int request, char *argp)
 {
 	switch (request) {
-		case FIONBIO:
-			return lwip_ioctl(get_lwip_fd(sockfdo), lwip_FIONBIO, argp);
-			break;
-		case FIONREAD:
-			return lwip_ioctl(get_lwip_fd(sockfdo), lwip_FIONREAD, argp);;
-			break;
-		default:
-			PERR("unsupported ioctl() request");
-			errno = ENOSYS;
-			return -1;
+	case FIONBIO:
+		return lwip_ioctl(get_lwip_fd(sockfdo), lwip_FIONBIO, argp);
+		break;
+	case FIONREAD:
+		return lwip_ioctl(get_lwip_fd(sockfdo), lwip_FIONREAD, argp);;
+		break;
+	default:
+		Genode::error("unsupported ioctl() request");
+		errno = ENOSYS;
+		return -1;
 	}
 }
 
@@ -556,7 +566,7 @@ Libc::File_descriptor *Plugin::socket(int domain, int type, int protocol)
 	int lwip_fd = lwip_socket(domain, type, protocol);
 
 	if (lwip_fd == -1) {
-		PERR("lwip_socket() failed");
+		Genode::error("lwip_socket() failed");
 		return 0;
 	}
 

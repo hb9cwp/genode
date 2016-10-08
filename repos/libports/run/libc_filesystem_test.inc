@@ -4,13 +4,13 @@
 # \date   2011-05-27
 #
 
-if {[have_spec hw_odroid_xu]} {
+if {[have_spec hw_odroid_xu] || [have_spec hw_zynq]} {
 	puts "Run script does not support this platform."
 	exit 0
 }
 
 # use SD on ARM
-set use_sd_card_drv [expr [have_spec omap4] || [have_spec platform_arndale] || [have_spec pl180]]
+set use_sd_card_drv [expr [have_spec omap4] || [have_spec arndale] || [have_spec pl180]]
 
 # use AHCI on x86
 set use_ahci        [have_spec x86]
@@ -61,12 +61,10 @@ set config {
 		<service name="IRQ"/>
 		<service name="IO_MEM"/>
 		<service name="IO_PORT"/>
-		<service name="CAP"/>
 		<service name="PD"/>
 		<service name="RM"/>
 		<service name="CPU"/>
 		<service name="LOG"/>
-		<service name="SIGNAL"/>
 	</parent-provides>
 	<default-route>
 		<any-service> <parent/> <any-child/> </any-service>
@@ -80,7 +78,10 @@ append config "
 append config {
 		<resource name="RAM" quantum="8M"/>
 		<config>
-			<iterations value="1"/>
+			<iterations value="1"/>}
+append_if [have_include "power_on/qemu"] config {
+			<write-read size="1M" buffer_size="8K"/>}
+append config {
 			<libc stdout="/dev/log" stderr="/dev/log">
 				<vfs>
 					<dir name="dev">}
@@ -160,8 +161,8 @@ catch { exec sh -c $cmd }
 # Qemu
 #
 append qemu_args " -m 128 -nographic "
-append_if $use_ahci        qemu_args " -drive id=disk,file=$disk_image,if=none -device ahci,id=ahci -device ide-drive,drive=disk,bus=ahci.0 -boot d"
-append_if $use_sd_card_drv qemu_args " -drive file=$disk_image,if=sd,cache=writeback "
+append_if $use_ahci        qemu_args " -drive id=disk,file=$disk_image,format=raw,if=none -device ahci,id=ahci -device ide-drive,drive=disk,bus=ahci.0 -boot d"
+append_if $use_sd_card_drv qemu_args " -drive file=$disk_image,format=raw,if=sd,cache=writeback "
 
 run_genode_until ".*child \"test-libc_$filesystem\" exited with exit value 0.*" 60
 

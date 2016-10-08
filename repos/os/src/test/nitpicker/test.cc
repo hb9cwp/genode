@@ -14,7 +14,7 @@
 #include <base/env.h>
 #include <util/list.h>
 #include <base/sleep.h>
-#include <base/printf.h>
+#include <base/log.h>
 #include <nitpicker_session/connection.h>
 #include <timer_session/connection.h>
 #include <input/event.h>
@@ -155,9 +155,9 @@ int main(int argc, char **argv)
 
 	int const scr_w = mode.width(), scr_h = mode.height();
 
-	printf("screen is %dx%d\n", scr_w, scr_h);
+	log("screen is ", mode);
 	if (!scr_w || !scr_h) {
-		PERR("Got invalid screen - spinning");
+		error("got invalid screen - sleeping forever");
 		sleep_forever();
 	}
 
@@ -206,7 +206,7 @@ int main(int argc, char **argv)
 	Test_view *tv = 0;
 	while (1) {
 
-		while (!nitpicker.input()->is_pending()) timer.msleep(20);
+		while (!nitpicker.input()->pending()) timer.msleep(20);
 
 		for (int i = 0, num_ev = nitpicker.input()->flush(); i < num_ev; i++) {
 

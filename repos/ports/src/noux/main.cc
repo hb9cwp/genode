@@ -52,7 +52,7 @@ namespace Noux {
 	static Noux::Child *init_child;
 	static int exit_value = ~0;
 
-	bool is_init_process(Child *child) { return child == init_child; }
+	bool init_process(Child *child) { return child == init_child; }
 	void init_process_exited(int exit) { init_child = 0; exit_value = exit; }
 
 };
@@ -66,7 +66,8 @@ extern void init_network();
 namespace Noux {
 	using namespace Genode;
 
-	class Timeout_scheduler : Thread<4096>, public Alarm_scheduler
+	class Timeout_scheduler : Thread_deprecated<1024*sizeof(long)>,
+	                          public Alarm_scheduler
 	{
 		private:
 			Timer::Connection _timer;
@@ -85,7 +86,7 @@ namespace Noux {
 
 		public:
 			Timeout_scheduler(unsigned long curr_time)
-			: Thread("timeout_sched"), _curr_time(curr_time) { start(); }
+			: Thread_deprecated("timeout_sched"), _curr_time(curr_time) { start(); }
 
 			Alarm::Time curr_time() const { return _curr_time; }
 	};
@@ -154,8 +155,7 @@ namespace Noux {
 bool Noux::Child::syscall(Noux::Session::Syscall sc)
 {
 	if (trace_syscalls)
-		Genode::printf("PID %d -> SYSCALL %s\n",
-		               pid(), Noux::Session::syscall_name(sc));
+		log("PID ", pid(), " -> SYSCALL ", Noux::Session::syscall_name(sc));
 
 	bool result = false;
 
@@ -170,7 +170,7 @@ bool Noux::Child::syscall(Noux::Session::Syscall sc)
 
 					Shared_pointer<Io_channel> io = _lookup_channel(_sysio->write_in.fd);
 
-					if (!io->is_nonblocking())
+					if (!io->nonblocking())
 						_block_for_io_channel(io, false, true, false);
 
 					if (io->check_unblock(false, true, false)) {
@@ -196,7 +196,7 @@ bool Noux::Child::syscall(Noux::Session::Syscall sc)
 			{
 				Shared_pointer<Io_channel> io = _lookup_channel(_sysio->read_in.fd);
 
-				if (!io->is_nonblocking())
+				if (!io->nonblocking())
 					_block_for_io_channel(io, true, false, false);
 
 				if (io->check_unblock(true, false, false))
@@ -387,14 +387,21 @@ bool Noux::Child::syscall(Noux::Session::Syscall sc)
 				}
 				catch (Child::Binary_does_not_exist) {
 					_sysio->error.execve = Sysio::EXECVE_NONEXISTENT; }
+				catch (Child::Insufficient_memory) {
+					_sysio->error.execve = Sysio::EXECVE_NOMEM; }
 
 				break;
 			}
 
 		case SYSCALL_SELECT:
 			{
-				Sysio::Select_fds &in_fds = _sysio->select_in.fds;
-				size_t in_fds_total = in_fds.total_fds();
+				size_t in_fds_total = _sysio->select_in.fds.total_fds();
+				Sysio::Select_fds in_fds;
+				for (Genode::size_t i = 0; i < in_fds_total; i++)
+					in_fds.array[i] = _sysio->select_in.fds.array[i];
+				in_fds.num_rd = _sysio->select_in.fds.num_rd;
+				in_fds.num_wr = _sysio->select_in.fds.num_wr;
+				in_fds.num_ex = _sysio->select_in.fds.num_ex;
 
 				int _rd_array[in_fds_total];
 				int _wr_array[in_fds_total];
@@ -507,8 +514,8 @@ bool Noux::Child::syscall(Noux::Session::Syscall sc)
 
 					if (_sysio->select_in.timeout.zero() || timeout_reached) {
 						/*
-						if (timeout_reached) PINF("timeout_reached");
-						else                 PINF("timeout.zero()");
+						if (timeout_reached) log("timeout_reached");
+						else                 log("timeout.zero()");
 						*/
 						_sysio->select_out.fds.num_rd = 0;
 						_sysio->select_out.fds.num_wr = 0;
@@ -583,36 +590,43 @@ bool Noux::Child::syscall(Noux::Session::Syscall sc)
 				Genode::addr_t parent_cap_addr = _sysio->fork_in.parent_cap_addr;
 
 				int const new_pid = pid_allocator()->alloc();
+				Child * child = nullptr;
 
-				/*
-				 * XXX To ease debugging, it would be useful to generate a
-				 *     unique name that includes the PID instead of just
-				 *     reusing the name of the parent.
-				 */
-				Child *child = new Child(_child_policy.name(),
-				                         this,
-				                         _kill_broadcaster,
-				                         *this,
-				                         new_pid,
-				                         _sig_rec,
-				                         root_dir(),
-				                         _args,
-				                         _env.env(),
-				                         _cap_session,
-				                         _parent_services,
-				                         _resources.ep,
-				                         true,
-				                         env()->heap(),
-				                         _destruct_queue,
-				                         verbose);
+				try {
+					/*
+					 * XXX To ease debugging, it would be useful to generate a
+					 *     unique name that includes the PID instead of just
+					 *     reusing the name of the parent.
+					 */
+					child = new Child(_child_policy.name(),
+					                  _ldso_ds,
+					                  this,
+					                  _kill_broadcaster,
+					                  *this,
+					                  new_pid,
+					                  _sig_rec,
+					                  root_dir(),
+					                  _args,
+					                  _env.env(),
+					                  _cap_session,
+					                  _parent_services,
+					                  _resources.ep,
+					                  true,
+					                  env()->heap(),
+					                  _destruct_queue,
+					                  verbose);
+				} catch (Child::Insufficient_memory) {
+					_sysio->error.fork = Sysio::FORK_NOMEM;
+					break;
+				}
 
 				Family_member::insert(child);
 
 				_assign_io_channels_to(child);
 
 				/* copy our address space into the new child */
-				_resources.rm.replay(child->ram(), child->rm(),
-				                     child->ds_registry(), _resources.ep);
+				_pd.replay(child->ram(), child->pd(),
+				           child->ds_registry(), _resources.ep);
 
 				/* start executing the main thread of the new process */
 				child->start_forked_main_thread(ip, sp, parent_cap_addr);
@@ -642,7 +656,7 @@ bool Noux::Child::syscall(Noux::Session::Syscall sc)
 					Family_member::remove(exited);
 
 					if (verbose)
-						PINF("submit exit signal for PID %d", exited->pid());
+						log("submit exit signal for PID ", exited->pid());
 					static_cast<Child *>(exited)->submit_exit_signal();
 
 				} else {
@@ -835,7 +849,7 @@ bool Noux::Child::syscall(Noux::Session::Syscall sc)
 
 		case SYSCALL_SYNC:
 			{
-				root_dir()->sync();
+				root_dir()->sync("/");
 				result = true;
 				break;
 			}
@@ -848,6 +862,14 @@ bool Noux::Child::syscall(Noux::Session::Syscall sc)
 				else
 					_sysio->error.kill = Sysio::KILL_ERR_SRCH;
 
+				break;
+			}
+
+		case SYSCALL_GETDTABLESIZE:
+			{
+				_sysio->getdtablesize_out.n =
+					Noux::File_descriptor_registry::MAX_FILE_DESCRIPTORS;
+				result = true;
 				break;
 			}
 
@@ -874,9 +896,9 @@ bool Noux::Child::syscall(Noux::Session::Syscall sc)
 
 	catch (Invalid_fd) {
 		_sysio->error.general = Vfs::Directory_service::ERR_FD_INVALID;
-		PERR("Invalid file descriptor"); }
+		error("invalid file descriptor"); }
 
-	catch (...) { PERR("Unexpected exception"); }
+	catch (...) { error("unexpected exception"); }
 
 	/* handle signals which might have occured */
 	while (!_pending_signals.empty() &&
@@ -922,7 +944,7 @@ static Noux::Args const &args_of_init_process()
 		}
 	}
 	catch (Genode::Xml_node::Nonexistent_sub_node) { }
-	catch (Noux::Args::Overrun) { PERR("Argument buffer overrun"); }
+	catch (Noux::Args::Overrun) { Genode::error("argument buffer overrun"); }
 
 	return args;
 }
@@ -1002,6 +1024,55 @@ Terminal::Connection *Noux::terminal()
 }
 
 
+static Noux::Io_channel *connect_stdio(Vfs::Dir_file_system            &root,
+                                       Noux::Terminal_io_channel::Type  type,
+                                       Genode::Signal_receiver         &sig_rec)
+{
+	using namespace Vfs;
+	using namespace Noux;
+	typedef Terminal_io_channel Tio; /* just a local abbreviation */
+
+	char path[MAX_PATH_LEN];
+	Vfs_handle *vfs_handle = nullptr;
+	char const *stdio_name = "";
+	unsigned mode = 0;
+
+	switch (type) {
+	case Tio::STDIN:
+		stdio_name = "stdin";
+		mode = Directory_service::OPEN_MODE_RDONLY;
+		break;
+	case Tio::STDOUT:
+		stdio_name = "stdout";
+		mode = Directory_service::OPEN_MODE_WRONLY;
+		break;
+	case Tio::STDERR:
+		stdio_name = "stderr";
+		mode = Directory_service::OPEN_MODE_WRONLY;
+		break;
+	};
+
+	try {
+		config()->xml_node().attribute(stdio_name).value(
+			path, sizeof(path));
+
+		if (root.open(path, mode, &vfs_handle) != Directory_service::OPEN_OK) {
+			error("failed to connect ", stdio_name, " to '", Cstring(path), "'");
+			Genode::env()->parent()->exit(1);
+		}
+
+		return new (Genode::env()->heap())
+			Vfs_io_channel(path, root.leaf_path(path), &root, vfs_handle, sig_rec);
+
+	} catch (Genode::Xml_node::Nonexistent_attribute) {
+		warning(stdio_name, " VFS path not defined, connecting to terminal session");
+	}
+
+	return new (Genode::env()->heap())
+		Tio(*Noux::terminal(), type, sig_rec);
+}
+
+
 Genode::Dataspace_capability Noux::ldso_ds_cap()
 {
 	try {
@@ -1029,7 +1100,24 @@ Genode::Lock &Noux::signal_lock()
 
 
 void *operator new (Genode::size_t size) {
-	return Genode::env()->heap()->alloc(size); }
+	void * ptr = Genode::env()->heap()->alloc(size);
+	if (!ptr)
+		return ptr;
+
+	Genode::memset(ptr, 0, size);
+	return ptr;
+}
+
+
+void operator delete (void * ptr)
+{
+	if (Genode::env()->heap()->need_size_for_free()) {
+		Genode::warning("leaking memory");
+		return;
+	}
+
+	Genode::env()->heap()->free(ptr, 0);
+}
 
 
 template <typename FILE_SYSTEM>
@@ -1045,10 +1133,7 @@ struct File_system_factory : Vfs::File_system_factory
 int main(int argc, char **argv)
 {
 	using namespace Noux;
-	PINF("--- noux started ---");
-
-	/* register dynamic linker */
-	Genode::Process::dynamic_linker(ldso_ds_cap());
+	log("--- noux started ---");
 
 	/* whitelist of service requests to be routed to the parent */
 	static Genode::Service_registry parent_services;
@@ -1059,12 +1144,8 @@ int main(int argc, char **argv)
 	static Genode::Cap_connection cap;
 
 	/* obtain global configuration */
-	try {
-		trace_syscalls = config()->xml_node().attribute("trace_syscalls").has_value("yes");
-	} catch (Xml_node::Nonexistent_attribute) { }
-	try {
-		verbose = config()->xml_node().attribute("verbose").has_value("yes");
-	} catch (Xml_node::Nonexistent_attribute) { }
+	trace_syscalls = config()->xml_node().attribute_value("trace_syscalls", trace_syscalls);
+	verbose        = config()->xml_node().attribute_value("verbose", verbose);
 
 	/* register additional file systems to the VFS */
 	Vfs::Global_file_system_factory &fs_factory = Vfs::global_file_system_factory();
@@ -1111,6 +1192,7 @@ int main(int argc, char **argv)
 	static Kill_broadcaster_implementation kill_broadcaster;
 
 	init_child = new Noux::Child(name_of_init_process(),
+	                             ldso_ds_cap(),
 	                             0,
 	                             kill_broadcaster,
 	                             *init_child,
@@ -1135,9 +1217,9 @@ int main(int argc, char **argv)
 	 */
 	typedef Terminal_io_channel Tio; /* just a local abbreviation */
 	Shared_pointer<Io_channel>
-		channel_0(new Tio(*Noux::terminal(), Tio::STDIN,  sig_rec), Genode::env()->heap()),
-		channel_1(new Tio(*Noux::terminal(), Tio::STDOUT, sig_rec), Genode::env()->heap()),
-		channel_2(new Tio(*Noux::terminal(), Tio::STDERR, sig_rec), Genode::env()->heap());
+		channel_0(connect_stdio(root_dir, Tio::STDIN,  sig_rec), Genode::env()->heap()),
+		channel_1(connect_stdio(root_dir, Tio::STDOUT, sig_rec), Genode::env()->heap()),
+		channel_2(connect_stdio(root_dir, Tio::STDERR, sig_rec), Genode::env()->heap());
 
 	init_child->add_io_channel(channel_0, 0);
 	init_child->add_io_channel(channel_1, 1);
@@ -1165,11 +1247,10 @@ int main(int argc, char **argv)
 		destruct_queue.flush();
 
 		if (verbose_quota)
-			PINF("quota: avail=%zd, used=%zd",
-				 env()->ram_session()->avail(),
-				 env()->ram_session()->used());
+			log("quota: avail=", env()->ram_session()->avail(), " "
+			    "used=",         env()->ram_session()->used());
 	}
 
-	PINF("--- exiting noux ---");
+	log("--- exiting noux ---");
 	return exit_value;
 }

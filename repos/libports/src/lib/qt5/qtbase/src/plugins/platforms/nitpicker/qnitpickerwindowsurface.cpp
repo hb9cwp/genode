@@ -34,6 +34,9 @@ QNitpickerWindowSurface::QNitpickerWindowSurface(QWindow *window)
 {
     //qDebug() << "QNitpickerWindowSurface::QNitpickerWindowSurface:" << (long)this;
 
+    /* Calling 'QWindow::winId()' ensures that the platform window has been created */
+    window->winId();
+
     _platform_window = static_cast<QNitpickerPlatformWindow*>(window->handle());
     connect(_platform_window, SIGNAL(framebuffer_changed()), this, SLOT(framebuffer_changed()));
 }
@@ -49,9 +52,6 @@ QPaintDevice *QNitpickerWindowSurface::paintDevice()
 		qDebug() << "QNitpickerWindowSurface::paintDevice()";
 
     if (_framebuffer_changed) {
-
-    	if (verbose)
-    		PDBG("framebuffer changed");
 
     	_framebuffer_changed = false;
     	/*

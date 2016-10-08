@@ -35,7 +35,7 @@ namespace Noux {
 
 		void poke(addr_t dst_offset, void const *src, size_t len)
 		{
-			PERR("Attempt to poke onto a ROM dataspace");
+			error("attempt to poke onto a ROM dataspace");
 		}
 	};
 
@@ -69,17 +69,17 @@ namespace Noux {
 				 * Lookup and lock ds info instead of directly accessing
 				 * the '_ds_info' member.
 				 */
-				Object_pool<Dataspace_info>::Guard
-					info(_ds_registry.lookup_info(_ds_info.ds_cap()));
+				_ds_registry.apply(_ds_info.ds_cap(), [this] (Dataspace_info *info) {
 
-				if (!info) {
-					PERR("~Rom_session_component: unexpected !info");
-					return;
-				}
+					if (!info) {
+						error("~Rom_session_component: unexpected !info");
+						return;
+					}
 
-				_ds_registry.remove(&_ds_info);
+					_ds_registry.remove(&_ds_info);
 
-				info->dissolve_users();
+					info->dissolve_users();
+				});
 			}
 
 

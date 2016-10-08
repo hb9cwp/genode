@@ -26,7 +26,6 @@ usage:
 	@echo "                  'okl4_x86'"
 	@echo "                  'nova_x86_32'"
 	@echo "                  'nova_x86_64'"
-	@echo "                  'codezero_vpb926'"
 	@echo "                  'hw_panda'"
 	@echo "                  'hw_pbxa9'"
 	@echo "                  'hw_imx53_qsb'"
@@ -36,7 +35,10 @@ usage:
 	@echo "                  'hw_arndale'"
 	@echo "                  'hw_odroid_xu'"
 	@echo "                  'hw_rpi'"
+	@echo "                  'hw_zynq'"
 	@echo "                  'hw_x86_64'"
+	@echo "                  'hw_x86_64_muen'"
+	@echo "                  'hw_riscv'"
 	@echo "                  'foc_x86_32'"
 	@echo "                  'foc_x86_64'"
 	@echo "                  'foc_pbxa9'"
@@ -46,7 +48,6 @@ usage:
 	@echo "                  'foc_rpi'"
 	@echo "                  'foc_odroid_x2'"
 	@echo "                  'sel4_x86_32'"
-	@echo "                  'lx_hybrid_x86'"
 	@echo
 	@echo "  The definition of BUILD_DIR is optional. If specified,"
 	@echo "  <build-dir> is the location of the build directory to create."
@@ -128,15 +129,13 @@ $(BUILD_DIR)/etc/build.conf:: $(BUILD_CONF_PLATFORM)
 	@cat $(BUILD_CONF).generic >> $@
 
 #
-# Add optional repositories for all platforms except for lx_hybrid
+# Add optional repositories for all platforms
 #
 # Those repositories rely on Genode's libc or contain device drivers.
 # Both prerequisites are not available for hybrid Linux/Genode programs.
 #
-ifneq ($(PLATFORM),lx_hybrid_x86)
 $(BUILD_DIR)/etc/build.conf::
 	@cat $(BUILD_CONF).optional >> $@
-endif
 
 $(BUILD_DIR)/Makefile:
 	@ln -sf $(GENODE_ABS_DIR)/tool/builddir/build.mk $@
@@ -152,7 +151,7 @@ endif
 #
 # Add x86 drivers repositories to x86 build directories
 #
-ifeq ($(filter-out foc_x86_32 foc_x86_64 okl4_x86 nova_x86_32 nova_x86_64 pistachio_x86 fiasco_x86 hw_x86_64 sel4_x86_32,$(PLATFORM)),)
+ifeq ($(filter-out foc_x86_32 foc_x86_64 okl4_x86 nova_x86_32 nova_x86_64 pistachio_x86 fiasco_x86 hw_x86_64 hw_x86_64_muen sel4_x86_32,$(PLATFORM)),)
 $(BUILD_DIR)/etc/build.conf::
 	@cat $(BUILD_CONF).drivers_x86 >> $@
 endif
@@ -175,9 +174,6 @@ $(PLATFORM):: $(BUILD_DIR)/Makefile
 #
 # Platform-specific dependencies
 #
-codezero_vpb926::
-	@echo "SPECS += codezero_platform_vpb926" > $(BUILD_DIR)/etc/specs.conf
-
 foc_x86_32::
 	@echo "SPECS  = genode foc_x86_32" > $(BUILD_DIR)/etc/specs.conf
 	@echo "SPECS += acpi"             >> $(BUILD_DIR)/etc/specs.conf
@@ -254,6 +250,12 @@ hw_rpi::
 	@echo "SPECS = genode hw_rpi" > $(BUILD_DIR)/etc/specs.conf
 	@echo "SPECS += perf_counter" >> $(BUILD_DIR)/etc/specs.conf
 
+hw_zynq::
+	@echo "SPECS = genode hw_zynq" > $(BUILD_DIR)/etc/specs.conf
+	@echo "SPECS += perf_counter" >> $(BUILD_DIR)/etc/specs.conf
+	@echo "## By default, hw_zynq is executed on Qemu" >> $(BUILD_DIR)/etc/specs.conf
+	@echo "SPECS += zynq_qemu" >> $(BUILD_DIR)/etc/specs.conf
+
 hw_odroid_xu::
 	@echo "SPECS = genode hw_odroid_xu" > $(BUILD_DIR)/etc/specs.conf
 	@echo "SPECS += perf_counter" >> $(BUILD_DIR)/etc/specs.conf
@@ -262,9 +264,11 @@ hw_x86_64::
 	@echo "SPECS = genode hw_x86_64" > $(BUILD_DIR)/etc/specs.conf
 	@echo "SPECS += acpi" >> $(BUILD_DIR)/etc/specs.conf
 
-lx_hybrid_x86::
-	@echo "CROSS_DEV_PREFIX =" > $(BUILD_DIR)/etc/tools.conf
-	@echo "SPECS += always_hybrid" >> $(BUILD_DIR)/etc/specs.conf
+hw_x86_64_muen::
+	@echo "SPECS = genode hw_x86_64_muen" > $(BUILD_DIR)/etc/specs.conf
+
+hw_riscv::
+	@echo "SPECS = genode hw_riscv" > $(BUILD_DIR)/etc/specs.conf
 
 $(PLATFORM)::
 	@echo "Successfully created build directory at $(BUILD_DIR)."

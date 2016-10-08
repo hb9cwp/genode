@@ -12,7 +12,7 @@
  */
 
 /* Genode includes */
-#include <base/printf.h>
+#include <base/log.h>
 
 /* VirtualBox includes */
 #include "HMInternal.h" /* enable access to hm.s.* */
@@ -23,8 +23,9 @@
 #include "sup.h"
 
 
-static bool enabled_hm = true;
-static bool enable_pae_nx  = false;
+static bool enabled_hm    = true;
+static bool enable_pae_nx = false;
+static bool enable_64bit  = false;
 
 VMMR3DECL(int) HMR3Init(PVM pVM)
 {
@@ -38,6 +39,10 @@ VMMR3DECL(int) HMR3Init(PVM pVM)
 	/* check whether to enable pae and nx bit - in 64bit host mode */
 	rc = CFGMR3QueryBoolDef(CFGMR3GetRoot(pVM), "EnablePAE", &enable_pae_nx,
 	                        false);
+	AssertRCReturn(rc, rc);
+
+	/* check whether to enable long-mode bit - in 64bit host mode */
+	rc = CFGMR3QueryBoolDef(pCfgHM, "64bitEnabled", &enable_64bit, false);
 	AssertRCReturn(rc, rc);
 
 	/*
@@ -80,6 +85,11 @@ VMMR3_INT_DECL(int) HMR3InitCompleted(PVM pVM, VMINITCOMPLETED enmWhat)
 			CPUMSetGuestCpuIdFeature(pVM, CPUMCPUIDFEATURE_PAE);
 			CPUMSetGuestCpuIdFeature(pVM, CPUMCPUIDFEATURE_NX);
 		}
+		if (sizeof(void *) > 4 && enable_64bit) {
+			CPUMSetGuestCpuIdFeature(pVM, CPUMCPUIDFEATURE_LONG_MODE);
+			CPUMSetGuestCpuIdFeature(pVM, CPUMCPUIDFEATURE_SYSCALL);
+	        CPUMSetGuestCpuIdFeature(pVM, CPUMCPUIDFEATURE_LAHF);
+		}
 	}
 
 	return rc;
@@ -95,7 +105,6 @@ VMMDECL(bool) HMIsEnabledNotMacro(PVM pVM)
 
 VMMR3DECL(bool) HMR3IsVmxPreemptionTimerUsed(PVM pVM)
 {
-//	PLOG("HMR3IsVmxPreemptionTimerUsed");
 	return false;
 }
 
@@ -121,7 +130,6 @@ VMMR3DECL(bool) HMR3IsRescheduleRequired(PVM pVM, PCPUMCTX pCtx)
 
 VMMR3DECL(bool) HMR3IsEventPending(PVMCPU pVCpu)
 {
-//	PLOG("HMR3IsEventPending false");
 	return false;
 }
 

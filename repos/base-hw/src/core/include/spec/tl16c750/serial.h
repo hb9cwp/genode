@@ -11,14 +11,14 @@
  * under the terms of the GNU General Public License version 2.
  */
 
-#ifndef _SERIAL_H_
-#define _SERIAL_H_
+#ifndef _CORE__INCLUDE__SPEC__TL16C750__SERIAL_H_
+#define _CORE__INCLUDE__SPEC__TL16C750__SERIAL_H_
 
 /* core includes */
 #include <board.h>
 
 /* Genode includes */
-#include <drivers/uart/tl16c750_base.h>
+#include <drivers/uart_base.h>
 
 namespace Genode
 {
@@ -42,4 +42,4 @@ namespace Genode
 	};
 }
 
-#endif /* _SERIAL_H_ */
+#endif /* _CORE__INCLUDE__SPEC__TL16C750__SERIAL_H_ */

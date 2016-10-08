@@ -6,15 +6,40 @@
 
 using namespace Kernel;
 
-Object_identity::Object_identity(Object & object) : _object(object) { }
+
+/************
+ ** Object **
+ ************/
+
+Object::~Object()
+{
+	for (Object_identity * oi = first(); oi; oi = first())
+		oi->invalidate();
+}
 
 
-Object_identity::~Object_identity()
+/*********************
+ ** Object_identity **
+ *********************/
+
+void Object_identity::invalidate()
 {
 	for (Object_identity_reference * oir = first(); oir; oir = first())
 		oir->invalidate();
+	_object.remove(this);
 }
 
+
+Object_identity::Object_identity(Object & object)
+: _object(object) { _object.insert(this); }
+
+
+Object_identity::~Object_identity() { invalidate(); }
+
+
+/*******************************
+ ** Object_identity_reference **
+ *******************************/
 
 Object_identity_reference *
 Object_identity_reference::find(Pd * pd)
@@ -50,12 +75,14 @@ Object_identity_reference * Object_identity_reference::factory(void * dst,
 
 
 void Object_identity_reference::invalidate() {
-	if (_identity) _identity->remove(this); }
+	if (_identity) _identity->remove(this);
+	_identity = nullptr;
+}
 
 
 Object_identity_reference::Object_identity_reference(Object_identity *oi,
                                                      Pd              &pd)
-: _capid(pd.capid_alloc().alloc()), _identity(oi), _pd(pd)
+: _capid(pd.capid_alloc().alloc()), _identity(oi), _pd(pd), _in_utcbs(0)
 {
 	if (_identity) _identity->insert(this);
 	_pd.cap_tree().insert(this);

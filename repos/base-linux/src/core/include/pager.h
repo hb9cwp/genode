@@ -17,10 +17,14 @@
 #ifndef _CORE__INCLUDE__PAGER_H_
 #define _CORE__INCLUDE__PAGER_H_
 
+/* Genode includes */
 #include <base/signal.h>
 #include <pager/capability.h>
 #include <cap_session/cap_session.h>
 #include <thread/capability.h>
+
+/* core-local includes */
+#include <rpc_cap_factory.h>
 
 namespace Genode {
 
@@ -40,19 +44,20 @@ namespace Genode {
 		 */
 		Thread_capability thread_cap() { return _thread_cap; } const
 		void thread_cap(Thread_capability cap) { _thread_cap = cap; }
-
-		/* required by lookup_and_lock, provided by Object_pool::Entry normally */
-		void release() { }
 	};
 
-	class Pager_activation_base { };
 	struct Pager_entrypoint
 	{
-		Pager_entrypoint(Cap_session *, Pager_activation_base *) { }
+		Pager_entrypoint(Rpc_cap_factory &) { }
 
-		Pager_object *lookup_and_lock(Pager_capability) { return 0; }
+		template <typename FUNC>
+		auto apply(Pager_capability, FUNC f) -> decltype(f(nullptr)) {
+			return f(nullptr); }
+
+		Pager_capability manage(Pager_object *) { return Pager_capability(); }
+
+		void dissolve(Pager_object *) { }
 	};
-	template <int FOO> class Pager_activation : public Pager_activation_base { };
 }
 
 #endif /* _CORE__INCLUDE__PAGER_H_ */

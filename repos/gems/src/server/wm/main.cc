@@ -38,7 +38,7 @@ namespace Wm {
 
 struct Wm::Main
 {
-	Server::Entrypoint ep;
+	Server::Entrypoint &ep;
 
 	Genode::Cap_connection cap;
 
@@ -54,18 +54,24 @@ struct Wm::Main
 	/* list of present windows, to be consumed by the layouter */
 	Reporter window_list_reporter = { "window_list" };
 
+	/* request to the layouter to set the focus */
+	Reporter focus_request_reporter = { "focus_request" };
+
 	Window_registry window_registry { *env()->heap(), window_list_reporter };
+
+	Nitpicker::Connection focus_nitpicker_session;
 
 	Nitpicker::Root nitpicker_root { ep, window_registry,
 	                                 *env()->heap(), env()->ram_session_cap(),
-	                                 pointer_reporter };
-
-	Nitpicker::Connection focus_nitpicker_session;
+	                                 pointer_reporter, focus_request_reporter,
+	                                 focus_nitpicker_session };
 
 	void handle_focus_update(unsigned)
 	{
 		try {
 			focus_rom.update();
+			if (!focus_rom.valid())
+				return;
 
 			unsigned long win_id = 0;
 
@@ -80,7 +86,7 @@ struct Wm::Main
 			}
 
 		} catch (...) {
-			PWRN("no focus model available");
+			Genode::warning("no focus model available");
 		}
 	}
 
@@ -90,6 +96,8 @@ struct Wm::Main
 	{
 		try {
 			resize_request_rom.update();
+			if (!resize_request_rom.valid())
+				return;
 
 			char const * const node_type = "window";
 
@@ -105,7 +113,7 @@ struct Wm::Main
 
 				nitpicker_root.request_resize(win_id, Area(width, height));
 
-				if (window.is_last(node_type))
+				if (window.last(node_type))
 					break;
 
 				window = window.next(node_type);
@@ -124,6 +132,8 @@ struct Wm::Main
 		/* initially report an empty window list */
 		window_list_reporter.enabled(true);
 		Genode::Reporter::Xml_generator xml(window_list_reporter, [&] () { });
+
+		focus_request_reporter.enabled(true);
 
 		focus_rom.sigh(focus_dispatcher);
 		resize_request_rom.sigh(resize_request_dispatcher);

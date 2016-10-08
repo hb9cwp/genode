@@ -9,7 +9,7 @@
  */
 
 /*
- * Copyright (C) 2014 Genode Labs GmbH
+ * Copyright (C) 2016 Genode Labs GmbH
  *
  * This file is part of the Genode OS framework, which is distributed
  * under the terms of the GNU General Public License version 2.
@@ -18,23 +18,42 @@
 #ifndef _AUDIO__AUDIO_H_
 #define _AUDIO__AUDIO_H_
 
-#include <os/server.h>
+/* Genode includes */
+#include <base/env.h>
+#include <util/xml_node.h>
+
 
 /*****************************
  ** private Audio namespace **
  *****************************/
 
-namespace Audio {
+namespace Audio_out {
 
 	enum Channel_number { LEFT, RIGHT, MAX_CHANNELS, INVALID = MAX_CHANNELS };
+}
 
-	void init_driver(Server::Entrypoint &ep);
+
+namespace Audio_in {
+
+	enum Channel_number { LEFT, MAX_CHANNELS, INVALID = MAX_CHANNELS };
+}
+
+
+namespace Audio {
+
+	void update_config(Genode::Xml_node);
+
+	void init_driver(Genode::Env &, Genode::Allocator &, Genode::Xml_node);
 
 	bool driver_active();
 
-	void dma_notifier(Genode::Signal_context_capability cap);
+	void play_sigh(Genode::Signal_context_capability cap);
+
+	void record_sigh(Genode::Signal_context_capability cap);
 
 	int play(short *data, Genode::size_t size);
+
+	int record(short *data, Genode::size_t size);
 }
 
 #endif /* _AUDIO__AUDIO_H_ */

@@ -18,8 +18,10 @@
 /* Genode includes */
 #include <thread/capability.h>
 #include <base/thread_state.h>
-#include <base/native_types.h>
 #include <base/thread.h>
+
+/* base-internal includes */
+#include <base/internal/stack.h>
 
 /* core includes */
 #include <pager.h>
@@ -42,19 +44,22 @@ namespace Genode {
 				MAIN_THREAD = 0x1U,
 				VCPU        = 0x2U,
 				WORKER      = 0x4U,
+				SC_CREATED  = 0x8U,
 			};
-			uint8_t            _features;
-			uint8_t            _priority;
+			uint8_t _features;
+			uint8_t _priority;
 
-			char               _name[Thread_base::Context::NAME_LEN];
+			Stack::Name _name;
 
-			addr_t _sel_ec() const { return _id_base; }
-			addr_t _sel_sc() const { return _id_base + 1; }
+			addr_t _sel_ec()     const { return _id_base; }
+			addr_t _sel_pt_oom() const { return _id_base + 1; }
+			addr_t _sel_sc()     const { return _id_base + 2; }
 
 			/* convenience function to access _feature variable */
-			inline bool is_main_thread() { return _features & MAIN_THREAD; }
-			inline bool is_vcpu()        { return _features & VCPU; }
-			inline bool is_worker()      { return _features & WORKER; }
+			inline bool main_thread() const { return _features & MAIN_THREAD; }
+			inline bool vcpu()        const { return _features & VCPU; }
+			inline bool worker()      const { return _features & WORKER; }
+			inline bool sc_created()  const { return _features & SC_CREATED; }
 
 		public:
 
@@ -64,8 +69,9 @@ namespace Genode {
 			/**
 			 * Constructor
 			 */
-			Platform_thread(const char *name = 0,
+			Platform_thread(size_t, const char *name = 0,
 			                unsigned priority = 0,
+			                Affinity::Location affinity = Affinity::Location(),
 			                int thread_id = THREAD_INVALID);
 
 			/**
@@ -87,7 +93,12 @@ namespace Genode {
 			/**
 			 * Pause this thread
 			 */
-			Native_capability pause();
+			void pause();
+
+			/**
+			 * Enable/disable single stepping
+			 */
+			void single_step(bool);
 
 			/**
 			 * Resume this thread
@@ -136,7 +147,7 @@ namespace Genode {
 			/**
 			 * Return identification of thread when faulting
 			 */
-			unsigned long pager_object_badge() const;
+			unsigned long pager_object_badge() { return (unsigned long)this; }
 
 			/**
 			 * Set the executing CPU for this thread
@@ -151,7 +162,12 @@ namespace Genode {
 			/**
 			 * Get thread name
 			 */
-			const char *name() const { return "noname"; }
+			const char *name() const { return _name.string(); }
+
+			/**
+			 * Get pd name
+			 */
+			const char *pd_name() const;
 
 			/**
 			 * Associate thread with protection domain
@@ -162,8 +178,6 @@ namespace Genode {
 
 				if (main_thread) _features |= MAIN_THREAD;
 			}
-
-			Native_capability single_step(bool on);
 
 			/**
 			 * Set CPU quota of the thread to 'quota'

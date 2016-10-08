@@ -10,14 +10,16 @@ set build_components {
 	drivers/timer
 	server/nitpicker
 	server/dynamic_rom
+	server/report_rom
 	drivers/framebuffer drivers/input
 	app/trace_subject_reporter
 	app/cpu_load_display
 	app/cpu_burner
+	app/pointer
 }
 
-lappend_if [have_spec usb]              build_components drivers/usb
-lappend_if [have_spec gpio]             build_components drivers/gpio
+lappend_if [have_spec usb]  build_components drivers/usb
+lappend_if [have_spec gpio] build_components drivers/gpio
 
 source ${genode_dir}/repos/base/run/platform_drv.inc
 append_platform_drv_build_components
@@ -38,12 +40,10 @@ append config {
 		<service name="IRQ"/>
 		<service name="IO_MEM"/>
 		<service name="IO_PORT"/>
-		<service name="CAP"/>
 		<service name="PD"/>
 		<service name="RM"/>
 		<service name="CPU"/>
 		<service name="LOG"/>
-		<service name="SIGNAL"/>
 		<service name="TRACE"/>
 	</parent-provides>
 	<default-route>
@@ -100,14 +100,27 @@ append config {
 		<resource name="RAM" quantum="1M"/>
 		<provides><service name="Timer"/></provides>
 	</start>
+
 	<start name="nitpicker">
 		<resource name="RAM" quantum="1M"/>
 		<provides><service name="Nitpicker"/></provides>
 		<config>
-			<domain name="default"   layer="2" />
-			<policy label=""                domain="default"/>
+			<domain name="pointer" layer="1" label="no" content="client" origin="pointer" />
+			<domain name="default" layer="2" label="no" content="client" hover="always" />
+
+			<policy label="pointer" domain="pointer"/>
+			<default-policy domain="default"/>
 		</config>
 	</start>
+
+	<start name="pointer">
+		<resource name="RAM" quantum="1M"/>
+		<route>
+			<service name="Nitpicker"> <child name="nitpicker"/> </service>
+			<any-service> <parent/> <any-child/> </any-service>
+		</route>
+	</start>
+
 	<start name="report_rom">
 		<resource name="RAM" quantum="4M"/>
 		<provides>
@@ -115,12 +128,11 @@ append config {
 			<service name="ROM"/>
 		</provides>
 		<config>
-			<rom>
-				<policy label="cpu_load_display -> trace_subjects"
-				        report="trace_subject_reporter -> trace_subjects"/>
-			</rom>
+			<policy label="cpu_load_display -> trace_subjects"
+			        report="trace_subject_reporter -> trace_subjects"/>
 		</config>
 	</start>
+
 	<start name="trace_subject_reporter" >
 		<resource name="RAM" quantum="6M"/>
 		<config period_ms="500">
@@ -130,12 +142,14 @@ append config {
 			<any-service> <child name="report_rom"/> <any-child/> <parent/> </any-service>
 		</route>
 	</start>
+
 	<start name="cpu_load_display">
 		<resource name="RAM" quantum="6M"/>
 		<route>
 			<any-service> <child name="report_rom"/> <any-child/> <parent/> </any-service>
 		</route>
 	</start>
+
 	<start name="dynamic_rom">
 		<resource name="RAM" quantum="4M"/>
 		<provides><service name="ROM"/></provides>
@@ -162,6 +176,7 @@ append config {
 			</rom>
 		</config>
 	</start>
+
 	<start name="cpu_burner.1">
 		<binary name="cpu_burner"/>
 		<resource name="RAM" quantum="1M"/>
@@ -170,6 +185,7 @@ append config {
 			<any-service> <child name="dynamic_rom"/> <any-child/> <parent/> </any-service>
 		</route>
 	</start>
+
 	<start name="cpu_burner.2">
 		<binary name="cpu_burner"/>
 		<resource name="RAM" quantum="1M"/>
@@ -195,7 +211,7 @@ foreach file { genode_logo.png grid.png } {
 set boot_modules {
 	core init
 	timer
-	nitpicker report_rom dynamic_rom
+	nitpicker report_rom dynamic_rom pointer
 	cpu_load_display cpu_burner trace_subject_reporter
 }
 

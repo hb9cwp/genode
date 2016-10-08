@@ -15,7 +15,7 @@
 #include "sched.h"
 
 #include <base/env.h>
-#include <base/printf.h>
+#include <base/log.h>
 #include <base/sleep.h>
 #include <os/timed_semaphore.h>
 #include <util/allocator_fap.h>
@@ -37,10 +37,10 @@ struct rumpuser_hyperup _rump_upcalls;
 
 int rumpuser_init(int version, const struct rumpuser_hyperup *hyp)
 {
-	PDBG("RUMP ver: %d", version);
+	Genode::log("RUMP ver: ", version);
 	if (version != SUPPORTED_RUMP_VERSION) {
-		PERR("Unsupported rump-kernel version (%d) - supported is %d)",
-		     version, SUPPORTED_RUMP_VERSION);
+		Genode::error("unsupported rump-kernel version (", version, ") - "
+		              "supported is ", (int)SUPPORTED_RUMP_VERSION);
 		return -1;
 	}
 
@@ -61,12 +61,16 @@ int rumpuser_init(int version, const struct rumpuser_hyperup *hyp)
  ** Threads **
  *************/
 
-static Hard_context _main_thread(0);
+static Hard_context * main_thread()
+{
+	static Hard_context inst(0);
+	return &inst;
+}
 
 static Hard_context *myself()
 {
-	Hard_context *h = dynamic_cast<Hard_context *>(Genode::Thread_base::myself());
-	return h ? h : &_main_thread;
+	Hard_context *h = dynamic_cast<Hard_context *>(Genode::Thread::myself());
+	return h ? h : main_thread();
 }
 
 
@@ -133,7 +137,7 @@ int rumpuser_getparam(const char *name, void *buf, size_t buflen)
 	enum { RESERVE_MEM = 2U * 1024 * 1024 };
 
 	/* support one cpu */
-	PDBG("%s", name);
+	Genode::log(name);
 	if (!Genode::strcmp(name, "_RUMPUSER_NCPU")) {
 		Genode::strncpy((char *)buf, "1", 2);
 		return 0;
@@ -151,7 +155,8 @@ int rumpuser_getparam(const char *name, void *buf, size_t buflen)
 		size_t rump_ram =  Genode::env()->ram_session()->avail();
 
 		if (rump_ram <= RESERVE_MEM) {
-			PERR("Insufficient quota need left: %zu < %u bytes", rump_ram, RESERVE_MEM);
+			Genode::error("insufficient quota left: ",
+			              rump_ram, " < ", (long)RESERVE_MEM, " bytes");
 			return -1;
 		}
 
@@ -159,7 +164,7 @@ int rumpuser_getparam(const char *name, void *buf, size_t buflen)
 
 		/* convert to string */
 		Genode::snprintf((char *)buf, buflen, "%zu", rump_ram);
-		PERR("Asserting rump kernel %zu KB of RAM", rump_ram / 1024);
+		Genode::log("asserting rump kernel ", rump_ram / 1024, " KB of RAM");
 		return 0;
 	}
 
@@ -181,12 +186,12 @@ void rumpuser_putchar(int ch)
 	if (ch == '\n') {
 		buf[count] = 0;
 		int nlocks;
-		if (myself() != &_main_thread)
+		if (myself() != main_thread())
 			rumpkern_unsched(&nlocks, 0);
 
-		PLOG("rump: %s", buf);
+		Genode::log("rump: ", Genode::Cstring((char const *)buf));
 
-		if (myself() != &_main_thread)
+		if (myself() != main_thread())
 			rumpkern_sched(nlocks, 0);
 
 		count = 0;
@@ -204,21 +209,26 @@ struct Allocator_policy
 	{
 		int nlocks;
 
-		if (myself() != &_main_thread)
+		if (myself() != main_thread())
 			rumpkern_unsched(&nlocks, 0);
 		return nlocks;
 	}
 
 	static void unblock(int nlocks)
 	{
-		if (myself() != &_main_thread)
+		if (myself() != main_thread())
 			rumpkern_sched(nlocks, 0);
 	}
 };
 
 
 typedef Allocator::Fap<128 * 1024 * 1024, Allocator_policy> Rump_alloc;
-static Genode::Lock _alloc_lock;
+
+static Genode::Lock & alloc_lock()
+{
+	static Genode::Lock inst;
+	return inst;
+}
 
 static Rump_alloc* allocator()
 {
@@ -228,13 +238,13 @@ static Rump_alloc* allocator()
 
 int rumpuser_malloc(size_t len, int alignment, void **memp)
 {
-	Genode::Lock::Guard guard(_alloc_lock);
+	Genode::Lock::Guard guard(alloc_lock());
 
 	int align = alignment ? Genode::log2(alignment) : 0;
 	*memp     = allocator()->alloc(len, align);
 
 	if (verbose)
-		PWRN("ALLOC: p: %p, s: %zx, a: %d %d", *memp, len, align, alignment);
+		Genode::log("ALLOC: p: ", *memp, ", s: ", len, ", a: ", align, " ", alignment);
 
 
 	return *memp ? 0 : -1;
@@ -243,12 +253,12 @@ int rumpuser_malloc(size_t len, int alignment, void **memp)
 
 void rumpuser_free(void *mem, size_t len)
 {
-	Genode::Lock::Guard guard(_alloc_lock);
+	Genode::Lock::Guard guard(alloc_lock());
 
 	allocator()->free(mem, len);
 
 	if (verbose)
-		PWRN("FREE: p: %p, s: %zx", mem, len);
+		Genode::warning("FREE: p: ", mem, ", s: ", len);
 }
 
 
@@ -309,7 +319,7 @@ void genode_exit(int) __attribute__((noreturn));
 void rumpuser_exit(int status)
 {
 	if (status == RUMPUSER_PANIC)
-		PERR("Rump panic");
+		Genode::error("Rump panic");
 
 	genode_exit(status);
 }

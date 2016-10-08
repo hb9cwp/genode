@@ -11,8 +11,8 @@
  * under the terms of the GNU General Public License version 2.
  */
 
-#ifndef _KERNEL__OBJECT_H_
-#define _KERNEL__OBJECT_H_
+#ifndef _CORE__INCLUDE__KERNEL__OBJECT_H_
+#define _CORE__INCLUDE__KERNEL__OBJECT_H_
 
 /* Genode includes */
 #include <util/avl_tree.h>
@@ -54,6 +54,9 @@ namespace Kernel
 	using Object_identity_reference_list
 		= Genode::List<Object_identity_reference>;
 
+	using Object_identity_list
+		= Genode::List<Kernel::Object_identity>;
+
 	/**
 	 * This class represents kernel object's identities including the
 	 * corresponding object identity reference for core
@@ -68,14 +71,15 @@ namespace Kernel
 }
 
 
-struct Kernel::Object
+struct Kernel::Object : public Kernel::Object_identity_list
 {
-	virtual ~Object() { }
+	virtual ~Object();
 };
 
 
 class Kernel::Object_identity
-: public Kernel::Object_identity_reference_list
+: public Object_identity_list::Element,
+  public Kernel::Object_identity_reference_list
 {
 	private:
 
@@ -88,6 +92,8 @@ class Kernel::Object_identity
 
 		template <typename KOBJECT>
 		KOBJECT * object() { return dynamic_cast<KOBJECT*>(&_object); }
+
+		void invalidate();
 };
 
 
@@ -100,6 +106,7 @@ class Kernel::Object_identity_reference
 		capid_t          _capid;
 		Object_identity *_identity;
 		Pd              &_pd;
+		unsigned short   _in_utcbs;
 
 	public:
 
@@ -118,6 +125,10 @@ class Kernel::Object_identity_reference
 
 		Pd &    pd()     { return _pd;    }
 		capid_t capid()  { return _capid; }
+
+		void add_to_utcb()      { _in_utcbs++; }
+		void remove_from_utcb() { _in_utcbs--; }
+		bool in_utcb()          { return _in_utcbs > 0; }
 
 		void invalidate();
 
@@ -165,8 +176,6 @@ class Kernel::Core_object_identity : public Object_identity,
 		: Object_identity(object),
 		  Object_identity_reference(this, *core_pd()) { }
 
-		virtual void destroy() { this->~Object_identity(); }
-
 		capid_t core_capid() { return capid(); }
 };
 
@@ -179,11 +188,6 @@ class Kernel::Core_object : public T, public Kernel::Core_object_identity<T>
 		template <typename... ARGS>
 		Core_object(ARGS &&... args)
 		: T(args...), Core_object_identity<T>(*static_cast<T*>(this)) { }
-
-		void destroy() {
-			Core_object_identity<T>::destroy();
-			this->~T();
-		}
 };
 
-#endif /* _KERNEL__OBJECT_H_ */
+#endif /* _CORE__INCLUDE__KERNEL__OBJECT_H_ */

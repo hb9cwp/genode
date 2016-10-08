@@ -204,10 +204,9 @@ class View : public Same_buffer_list_elem,
 		 */
 		virtual int frame_size(Mode const &mode) const
 		{
-			if (_session.xray_opaque()) return 1;
-			if (_session.xray_no())     return 0;
+			if (!_session.label_visible()) return 0;
 
-			return mode.is_focused(_session) ? 5 : 3;
+			return mode.focused(_session) ? 5 : 3;
 		}
 
 		/**
@@ -237,10 +236,10 @@ class View : public Same_buffer_list_elem,
 		/**
 		 * Set view as background
 		 *
-		 * \param is_bg  true if view is background
+		 * \param bg  true if view is background
 		 */
-		void background(bool is_bg) {
-			_background = is_bg ? BACKGROUND : NOT_BACKGROUND; }
+		void background(bool bg) {
+			_background = bg ? BACKGROUND : NOT_BACKGROUND; }
 
 		/**
 		 * Accessors
@@ -276,7 +275,7 @@ class View : public Same_buffer_list_elem,
 				return false;
 
 			/* if view uses an alpha channel, check the input mask */
-			if ((mode.flat() || _session.xray_no()) && session().uses_alpha())
+			if (_session.content_client() && session().uses_alpha())
 				return session().input_mask_at(p - view_rect.p1() - _buffer_off);
 
 			return true;

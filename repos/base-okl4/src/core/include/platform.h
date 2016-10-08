@@ -21,7 +21,7 @@
 #include <platform_generic.h>
 #include <platform_thread.h>
 #include <platform_pd.h>
-#include <core_rm_session.h>
+#include <core_region_map.h>
 #include <core_mem_alloc.h>
 
 /* OKL4 includes */
@@ -35,7 +35,6 @@ namespace Genode {
 	{
 		private:
 
-			using Phys_allocator = Core_mem_allocator::Phys_allocator;
 			using Rom_slab       = Tslab<Rom_module, get_page_size()>;
 			using Thread_slab    = Tslab<Platform_thread, get_page_size()>;
 

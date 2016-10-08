@@ -7,7 +7,7 @@ if {![have_spec linux]} {
 }
 
 set build_components {
-	core init drivers/timer drivers/framebuffer/sdl
+	core init drivers/timer drivers/framebuffer
 	server/dynamic_rom server/report_rom server/nitpicker app/decorator
 }
 
@@ -29,8 +29,6 @@ append config {
 		<service name="IRQ"/>
 		<service name="IO_MEM"/>
 		<service name="IO_PORT"/>
-		<service name="CAP"/>
-		<service name="SIGNAL"/>
 	</parent-provides>
 	<default-route>
 		<any-service> <parent/> <any-child/> </any-service>
@@ -61,13 +59,8 @@ append config {
 		<provides><service name="Nitpicker"/></provides>
 		<config>
 			<report pointer="yes" />
-			<domain name="" layer="2" />
-			<policy label="" domain=""/>
-			<global-key name="KEY_SCROLLLOCK" operation="xray" />
-			<global-key name="KEY_SYSRQ"      operation="kill" />
-			<global-key name="KEY_PRINT"      operation="kill" />
-			<global-key name="KEY_F11"        operation="kill" />
-			<global-key name="KEY_F12"        operation="xray" />
+			<domain name="default" layer="2" content="client" label="no"/>
+			<default-policy domain="default"/>
 		</config>
 	</start>
 	<start name="dynamic_rom">

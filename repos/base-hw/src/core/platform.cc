@@ -15,7 +15,7 @@
 /* Genode includes */
 #include <base/printf.h>
 #include <base/sleep.h>
-#include <kernel/log.h>
+#include <base/log.h>
 
 /* core includes */
 #include <core_parent.h>
@@ -29,12 +29,15 @@
 #include <translation_table.h>
 #include <trustzone.h>
 
+/* base-internal includes */
+#include <base/internal/stack_area.h>
+
 using namespace Genode;
 
 extern int _prog_img_beg;
 extern int _prog_img_end;
 
-void __attribute__((weak)) Kernel::init_trustzone(Pic * pic) { }
+void __attribute__((weak)) Kernel::init_trustzone(Pic & pic) { }
 
 /**
  * Format of a boot-module header
@@ -136,6 +139,10 @@ Platform::Platform()
 	init_alloc(_core_mem_alloc.virt_alloc(), virt_region,
 	           _core_only_ram_regions, get_page_size_log2());
 
+	/* preserve stack area in core's virtual address space */
+	_core_mem_alloc.virt_alloc()->remove_range(stack_area_virtual_base(),
+	                                           stack_area_virtual_size());
+
 	_init_io_port_alloc();
 
 	/* make all non-kernel interrupts available to the interrupt allocator */
@@ -155,27 +162,29 @@ Platform::Platform()
 		_rom_fs.insert(rom_module);
 	}
 
+	_init_additional();
+
 	/* print ressource summary */
 	if (VERBOSE) {
 		printf("Core virtual memory allocator\n");
 		printf("---------------------\n");
-		_core_mem_alloc.virt_alloc()->raw()->dump_addr_tree();
+		(*_core_mem_alloc.virt_alloc())()->dump_addr_tree();
 		printf("\n");
 		printf("RAM memory allocator\n");
 		printf("---------------------\n");
-		_core_mem_alloc.phys_alloc()->raw()->dump_addr_tree();
+		(*_core_mem_alloc.phys_alloc())()->dump_addr_tree();
 		printf("\n");
 		printf("IO memory allocator\n");
 		printf("-------------------\n");
-		_io_mem_alloc.raw()->dump_addr_tree();
+		_io_mem_alloc()->dump_addr_tree();
 		printf("\n");
 		printf("IO port allocator\n");
 		printf("-------------------\n");
-		_io_port_alloc.raw()->dump_addr_tree();
+		_io_port_alloc()->dump_addr_tree();
 		printf("\n");
 		printf("IRQ allocator\n");
 		printf("-------------------\n");
-		_irq_alloc.raw()->dump_addr_tree();
+		_irq_alloc()->dump_addr_tree();
 		printf("\n");
 		printf("ROM filesystem\n");
 		printf("--------------\n");
@@ -191,8 +200,8 @@ Platform::Platform()
 
 void Core_parent::exit(int exit_value)
 {
-	Kernel::log() << __PRETTY_FUNCTION__ << "not implemented\n";
-	while (1) ;
+	warning(__PRETTY_FUNCTION__, "not implemented");
+	while (1);
 }
 
 
@@ -217,12 +226,11 @@ bool Genode::unmap_local(addr_t virt_addr, size_t num_pages)
 }
 
 
-bool Core_mem_allocator::Mapped_mem_allocator::_map_local(addr_t   virt_addr,
-                                                          addr_t   phys_addr,
-                                                          unsigned size) {
+bool Mapped_mem_allocator::_map_local(addr_t virt_addr, addr_t phys_addr,
+                                      unsigned size) {
 	return ::map_local(phys_addr, virt_addr, size / get_page_size()); }
 
 
-bool Core_mem_allocator::Mapped_mem_allocator::_unmap_local(addr_t   virt_addr,
-                                                            unsigned size) {
+bool Mapped_mem_allocator::_unmap_local(addr_t virt_addr, addr_t phys_addr,
+                                        unsigned size) {
 	return ::unmap_local(virt_addr, size / get_page_size()); }

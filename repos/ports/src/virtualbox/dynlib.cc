@@ -12,7 +12,7 @@
  */
 
 /* Genode includes */
-#include <base/printf.h>
+#include <base/log.h>
 #include <util/string.h>
 
 /* VirtualBox includes */
@@ -22,14 +22,18 @@
 
 extern "C" {
 
-DECLCALLBACK(DECLEXPORT(int)) VBoxHGCMSvcLoad (VBOXHGCMSVCFNTABLE *ptable);
+DECLCALLBACK(DECLEXPORT(int)) VBoxHGCMSvcLoad_sf (VBOXHGCMSVCFNTABLE *ptable);
+DECLCALLBACK(DECLEXPORT(int)) VBoxHGCMSvcLoad_cb (VBOXHGCMSVCFNTABLE *ptable);
 
 
 static struct shared {
 	const char * name;
 	const char * symbol;
 	void * func;
-} shared[] = {{ "VBoxSharedFolders", VBOX_HGCM_SVCLOAD_NAME, (void *)VBoxHGCMSvcLoad }};
+} shared[] = {
+	{ "VBoxSharedFolders", VBOX_HGCM_SVCLOAD_NAME, (void *)VBoxHGCMSvcLoad_sf },
+	{ "VBoxSharedClipboard", VBOX_HGCM_SVCLOAD_NAME, (void *)VBoxHGCMSvcLoad_cb }
+};
 
 
 int RTLdrLoad(const char *pszFilename, PRTLDRMOD phLdrMod)
@@ -42,7 +46,7 @@ int RTLdrLoad(const char *pszFilename, PRTLDRMOD phLdrMod)
 		return VINF_SUCCESS;
 	}
 
-	PERR("shared library '%s' not supported", pszFilename);
+	Genode::error("shared library '", pszFilename, "' not supported");
 	return VERR_NOT_SUPPORTED;
 }
 
@@ -55,15 +59,15 @@ int RTLdrGetSymbol(RTLDRMOD hLdrMod, const char *pszSymbol, void **ppvValue)
 	if (!(shared <= library &&
 	      library < shared + sizeof(shared) / sizeof(shared[0]))) {
 
-		PERR("shared library handle %p unknown - symbol looked for '%s'",
-		     hLdrMod, pszSymbol); 
+		Genode::error("shared library handle ", hLdrMod, " unknown - "
+		              "symbol looked for '", pszSymbol, "'");
 
 		return VERR_NOT_SUPPORTED;
 	}
 
 	if (Genode::strcmp(pszSymbol, library->symbol)) {
-		PERR("shared library '%s' does not provide symbol '%s'",
-		     library->name, pszSymbol);
+		Genode::error("shared library '", library->name, "' does not provide "
+		              "symbol '", pszSymbol, "'");
 
 		return VERR_NOT_SUPPORTED;
 	}

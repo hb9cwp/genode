@@ -12,16 +12,13 @@
  */
 
 /* Genode includes */
-#include <base/printf.h>
+#include <base/log.h>
 #include <base/signal.h>
 #include <nitpicker_session/connection.h>
 #include <os/pixel_rgb565.h>
 #include <os/attached_rom_dataspace.h>
 #include <os/reporter.h>
-
-/* Nitpicker graphics backend */
-#include <nitpicker_gfx/text_painter.h>
-#include <nitpicker_gfx/box_painter.h>
+#include <os/server.h>
 
 /* decorator includes */
 #include <decorator/window_stack.h>
@@ -40,7 +37,7 @@ namespace Decorator {
 
 struct Decorator::Main : Window_factory_base
 {
-	Signal_receiver &sig_rec;
+	Server::Entrypoint &ep;
 
 	Nitpicker::Connection nitpicker;
 
@@ -59,8 +56,8 @@ struct Decorator::Main : Window_factory_base
 	 */
 	void handle_window_layout_update(unsigned);
 
-	Signal_dispatcher<Main> window_layout_dispatcher = {
-		sig_rec, *this, &Main::handle_window_layout_update };
+	Signal_rpc_member<Main> window_layout_dispatcher = {
+		ep, *this, &Main::handle_window_layout_update };
 
 	Attached_rom_dataspace window_layout { "window_layout" };
 
@@ -69,8 +66,8 @@ struct Decorator::Main : Window_factory_base
 	 */
 	void handle_pointer_update(unsigned);
 
-	Signal_dispatcher<Main> pointer_dispatcher = {
-		sig_rec, *this, &Main::handle_pointer_update };
+	Signal_rpc_member<Main> pointer_dispatcher = {
+		ep, *this, &Main::handle_pointer_update };
 
 	Attached_rom_dataspace pointer { "pointer" };
 
@@ -79,6 +76,8 @@ struct Decorator::Main : Window_factory_base
 	Reporter hover_reporter = { "hover" };
 
 	bool window_layout_update_needed = false;
+
+	Reporter decorator_margins_reporter = { "decorator_margins" };
 
 	Animator animator;
 
@@ -101,20 +100,49 @@ struct Decorator::Main : Window_factory_base
 	 */
 	void handle_nitpicker_sync(unsigned);
 
-	Signal_dispatcher<Main> nitpicker_sync_dispatcher = {
-		sig_rec, *this, &Main::handle_nitpicker_sync };
+	Signal_rpc_member<Main> nitpicker_sync_dispatcher = {
+		ep, *this, &Main::handle_nitpicker_sync };
+
+	Config config { *Genode::env()->heap() };
+
+	void handle_config(unsigned);
+
+	Signal_rpc_member<Main> config_dispatcher = {
+		ep, *this, &Main::handle_config};
 
 	/**
 	 * Constructor
 	 */
-	Main(Signal_receiver &sig_rec) : sig_rec(sig_rec)
+	Main(Server::Entrypoint &ep) : ep(ep)
 	{
+		Genode::config()->sigh(config_dispatcher);
+		handle_config(0);
+
 		window_layout.sigh(window_layout_dispatcher);
 		pointer.sigh(pointer_dispatcher);
 
 		nitpicker.framebuffer()->sync_sigh(nitpicker_sync_dispatcher);
 
 		hover_reporter.enabled(true);
+
+		decorator_margins_reporter.enabled(true);
+
+		Genode::Reporter::Xml_generator xml(decorator_margins_reporter, [&] ()
+		{
+			xml.node("floating", [&] () {
+
+				Window::Border const border = Window::border_floating();
+
+				xml.attribute("top",    border.top);
+				xml.attribute("bottom", border.bottom);
+				xml.attribute("left",   border.left);
+				xml.attribute("right",  border.right);
+			});
+		});
+
+		/* import initial state */
+		handle_pointer_update(0);
+		handle_window_layout_update(0);
 	}
 
 	/**
@@ -125,9 +153,9 @@ struct Decorator::Main : Window_factory_base
 		for (unsigned retry = 0 ; retry < 2; retry ++) {
 			try {
 				return new (env()->heap())
-					Window(attribute(window_node, "id", 0UL), nitpicker, animator);
+					Window(attribute(window_node, "id", 0UL), nitpicker, animator, config);
 			} catch (Nitpicker::Session::Out_of_metadata) {
-				PINF("Handle Out_of_metadata of nitpicker session - upgrade by 8K");
+				Genode::log("Handle Out_of_metadata of nitpicker session - upgrade by 8K");
 				Genode::env()->parent()->upgrade(nitpicker.cap(), "ram_quota=8192");
 			}
 		}
@@ -142,6 +170,21 @@ struct Decorator::Main : Window_factory_base
 		Genode::destroy(env()->heap(), static_cast<Window *>(window));
 	}
 };
+
+
+void Decorator::Main::handle_config(unsigned)
+{
+	Genode::config()->reload();
+
+	config.update();
+
+	/* notify all windows to consider the updated policy */
+	window_stack.for_each_window([&] (Window_base &window) {
+		static_cast<Window &>(window).adapt_to_changed_config(); });
+
+	/* trigger redraw of the window stack */
+	handle_window_layout_update(0);
+}
 
 
 static Decorator::Window_base::Hover
@@ -181,6 +224,10 @@ static void update_hover_report(Genode::Xml_node pointer_node,
 					if (hover.top_sizer)    xml.node("top_sizer");
 					if (hover.bottom_sizer) xml.node("bottom_sizer");
 					if (hover.title)        xml.node("title");
+					if (hover.closer)       xml.node("closer");
+					if (hover.minimizer)    xml.node("minimizer");
+					if (hover.maximizer)    xml.node("maximizer");
+					if (hover.unmaximizer)  xml.node("unmaximizer");
 				});
 			}
 		});
@@ -205,7 +252,7 @@ void Decorator::Main::handle_nitpicker_sync(unsigned)
 
 	bool model_updated = false;
 
-	if (window_layout_update_needed && window_layout.is_valid()) {
+	if (window_layout_update_needed && window_layout.valid()) {
 
 		try {
 			Xml_node xml(window_layout.local_addr<char>(),
@@ -218,7 +265,7 @@ void Decorator::Main::handle_nitpicker_sync(unsigned)
 			 * A decorator element might have appeared or disappeared under
 			 * the pointer.
 			 */
-			if (pointer.is_valid())
+			if (pointer.valid())
 				update_hover_report(Xml_node(pointer.local_addr<char>()),
 				                    window_stack, hover, hover_reporter);
 
@@ -262,31 +309,24 @@ void Decorator::Main::handle_pointer_update(unsigned)
 {
 	pointer.update();
 
-	if (pointer.is_valid())
+	if (pointer.valid())
 		update_hover_report(Xml_node(pointer.local_addr<char>()),
 		                    window_stack, hover, hover_reporter);
 }
 
 
-int main(int argc, char **argv)
-{
-	static Genode::Signal_receiver sig_rec;
+/************
+ ** Server **
+ ************/
 
-	static Decorator::Main application(sig_rec);
+namespace Server {
 
-	/* import initial state */
-	application.handle_pointer_update(0);
-	application.handle_window_layout_update(0);
+	char const *name() { return "decorator_ep"; }
 
-	/* process incoming signals */
-	for (;;) {
-		using namespace Genode;
+	size_t stack_size() { return 8*1024*sizeof(long); }
 
-		Signal sig = sig_rec.wait_for_signal();
-		Signal_dispatcher_base *dispatcher =
-			dynamic_cast<Signal_dispatcher_base *>(sig.context());
-
-		if (dispatcher)
-			dispatcher->dispatch(sig.num());
+	void construct(Entrypoint &ep)
+	{
+		static Decorator::Main main(ep);
 	}
 }

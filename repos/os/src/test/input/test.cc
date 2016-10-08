@@ -12,7 +12,7 @@
  */
 
 #include <base/env.h>
-#include <base/printf.h>
+#include <base/log.h>
 #include <timer_session/connection.h>
 #include <input_session/connection.h>
 #include <input/event.h>
@@ -54,11 +54,11 @@ int main(int argc, char **argv)
 	static Input::Connection input;
 	static Timer::Connection timer;
 
-	PLOG("--- Input test is up ---");
+	log("--- Input test is up ---");
 
 	Input::Event *ev_buf = (env()->rm_session()->attach(input.dataspace()));
 
-	PLOG("input buffer at %p", ev_buf);
+	log("input buffer at ", ev_buf);
 
 	/*
 	 * Handle input events
@@ -66,7 +66,7 @@ int main(int argc, char **argv)
 	int key_cnt = 0;
 	while (1) {
 		/* poll input service every 20 ms */
-		while (!input.is_pending()) timer.msleep(20);
+		while (!input.pending()) timer.msleep(20);
 
 		for (int i = 0, num_ev = input.flush(); i < num_ev; ++i) {
 
@@ -76,9 +76,14 @@ int main(int argc, char **argv)
 			if (ev->type() == Input::Event::RELEASE) key_cnt--;
 
 			/* log event */
-			PLOG("Input event type=%s\tcode=%d\trx=%d\try=%d\tax=%d\tay=%d\tkey_cnt=%d\t%s",
-			     ev_type(ev->type()), ev->code(), ev->rx(), ev->ry(),
-			     ev->ax(), ev->ay(), key_cnt, key_name(ev));
+			log("Input event "
+			    "type=",    ev_type(ev->type()),   "\t"
+			    "code=",    ev->code(), "\t"
+			    "rx=",      ev->rx(),   "\t"
+			    "ry=",      ev->ry(),   "\t"
+			    "ax=",      ev->ax(),   "\t"
+			    "ay=",      ev->ay(),   "\t"
+			    "key_cnt=", key_cnt,    "\t", key_name(ev));
 		}
 	}
 

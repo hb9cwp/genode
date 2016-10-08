@@ -13,7 +13,7 @@
 
 /* Genode includes */
 #include <util/list.h>
-#include <base/printf.h>
+#include <base/log.h>
 #include <base/lock.h>
 #include <base/env.h>
 
@@ -116,8 +116,9 @@ class Guest_ioports
 				PDMCritSectLeave(_pDevIns->CTX_SUFF(pCritSectRo));
 
 				if (rc != VERR_IOM_IOPORT_UNUSED && rc != VINF_SUCCESS)
-					PDBG("IOPORT read port=0x%x failed - callback %p eip %p",
-					     port, _pfnInCallback, __builtin_return_address(0));
+					Genode::log("IOPORT read port=", Genode::Hex(port), " failed"
+					            " - callback=", _pfnInCallback, " eip=",
+					            __builtin_return_address(0));
  
 				return rc;
 			}
@@ -129,10 +130,8 @@ class Guest_ioports
 		Range *_lookup(RTIOPORT PortStart, RTUINT cPorts)
 		{
 			for (Range *r = _ranges.first(); r; r = r->next())
-				if (r->contains(PortStart, cPorts)) {
-//					PINF("lookuped %lx %lx", r->_PortStart, r->_cPorts);
+				if (r->contains(PortStart, cPorts))
 					return r;
-				}
 
 			return 0;
 		}
@@ -140,27 +139,9 @@ class Guest_ioports
 		void dump()
 		{
 			for (Range *r = _ranges.first(); r; r = r->next())
-				PINF("0x%x+0x%x - '%s'\n",
-				     r->_PortStart, r->_cPorts,
-				     r->_pDevIns && r->_pDevIns->pReg ? r->_pDevIns->pReg->szName : 0);
-		}
-
-		/*
-		 * The whitelist is used to suppress log messages, which the VM tries
-		 * to access I/O ports with no device model associated. TinyCore Linux
-		 * seems to probe a lot of I/O ports, e.g. the LPT3 ports.
-		 */
-		bool _white_listed(RTIOPORT port)
-		{
-			/* LPT1 */ if (port >= 0x0378 && port <= 0x037f) return true;
-			/* LPT3 */ if (port >= 0x0278 && port <= 0x027f) return true;
-			/* ECP  */ if (port >= 0x0778 && port <= 0x077a) return true;
-			/* IDE1 */ if (port >= 0x0170 && port <= 0x017f) return true;
-			/* COM1 */ if (port >= 0x03f8 && port <= 0x03ff) return true;
-			/* COM2 */ if (port >= 0x02f8 && port <= 0x02ff) return true;
-			/* COM3 */ if (port >= 0x03e8 && port <= 0x03ef) return true;
-			/* COM4 */ if (port >= 0x02e8 && port <= 0x02ef) return true;
-			return false;
+				Genode::log(Genode::Hex(r->_PortStart), "+",
+				            Genode::Hex(r->_cPorts), " - '",
+				            r->_pDevIns && r->_pDevIns->pReg ? r->_pDevIns->pReg->szName : 0, "'");
 		}
 
 	public:
@@ -174,17 +155,19 @@ class Guest_ioports
 		{
 			Range *r = _lookup(PortStart, cPorts);
 			if (r) {
-				PERR("io port inseration failure 0x%x+0x%x - '%s'",
-				     PortStart, cPorts,
-				     pDevIns && pDevIns->pReg ? pDevIns->pReg->szName : 0);
+				Genode::error("io port inseration failure ",
+				              Genode::Hex(PortStart), "+",
+				              Genode::Hex(cPorts), " - '",
+				              pDevIns && pDevIns->pReg ? pDevIns->pReg->szName : 0, "'");
 				dump();
 				Assert(!r);
 				return VERR_GENERAL_FAILURE;
 			}
 
 			if (verbose)
-				PLOG("insert io port range 0x%x+0x%x - '%s'", PortStart, cPorts,
-				     pDevIns && pDevIns->pReg ? pDevIns->pReg->szName : 0);
+				Genode::log("insert io port range ", Genode::Hex(PortStart), "+",
+				            Genode::Hex(cPorts), " - '",
+				            pDevIns && pDevIns->pReg ? pDevIns->pReg->szName : 0, "'");
 
 			_ranges.insert(new (Genode::env()->heap())
 			               Range(pDevIns, PortStart, cPorts, pvUser,
@@ -208,10 +191,13 @@ class Guest_ioports
 				deleted = true;
 
 				if (verbose)
-					PLOG("delete io port range 0x%x+0x%x out of 0x%x+0x%x - '%s'",
-					     r->_PortStart, r->_cPorts, PortStart, cPorts,
-					     r->_pDevIns &&
-					     r->_pDevIns->pReg ? r->_pDevIns->pReg->szName : 0);
+					Genode::log("delete io port range ",
+					            Genode::Hex(r->_PortStart), "+",
+					            Genode::Hex(r->_cPorts),    " out of ",
+					            Genode::Hex(PortStart),     "+",
+					            Genode::Hex(cPorts),        " - '",
+					            r->_pDevIns &&
+					            r->_pDevIns->pReg ? r->_pDevIns->pReg->szName : 0, "'");
 
 				Range *s = r;
 				r = r->next();
@@ -229,12 +215,13 @@ class Guest_ioports
 			if (r)
 				return r->write(port, u32Value, cbValue);
 
-			if (_white_listed(port))
-				return VINF_SUCCESS;
+			if (verbose) {
+				char c = u32Value & 0xff;
+				Genode::warning("attempted to write to non-existing port ",
+				                Genode::Hex(port), "+", cbValue, " "
+				                "value=", Genode::Hex(c));
+			}
 
-			char c = u32Value & 0xff;
-			PWRN("attempted to write to non-existing port 0x%x+%zu  %c (%02x)",
-			     port, cbValue, c >= 32 && c <= 176 ? c : '.', c);
 			return VINF_SUCCESS;
 		}
 
@@ -246,9 +233,9 @@ class Guest_ioports
 				if (err != VERR_IOM_IOPORT_UNUSED)
 					return err;
 			} else
-			if (!_white_listed(port))
-				PWRN("attempted to read from non-existing port 0x%x+%zu %p",
-				     port, cbValue, r);
+				if (verbose)
+					Genode::warning("attempted to read from non-existing port ",
+					                Genode::Hex(port), "+", cbValue, " ", r);
 
 			switch (cbValue)
 			{
@@ -262,8 +249,8 @@ class Guest_ioports
 					*reinterpret_cast<uint32_t *>(pu32Value) = 0xFFFFFFFFU;
 					break;
 				default:
-					PERR("Invalid I/O port (%x) access of size (%zx)",
-					     port, cbValue);
+					Genode::error("Invalid I/O port (", Genode::Hex(port), ") "
+					              "access of size (", Genode::Hex(cbValue), ")");
 					return VERR_IOM_INVALID_IOPORT_SIZE;
 			}
 			return VINF_SUCCESS;
@@ -292,8 +279,9 @@ IOMR3IOPortRegisterR3(PVM pVM, PPDMDEVINS pDevIns,
                       const char *pszDesc)
 {
 	if (verbose)
-		PLOG("register I/O port range 0x%x-0x%x '%s'",
-		     PortStart, PortStart + cPorts - 1, pszDesc);
+		Genode::log("register I/O port range ",
+		            Genode::Hex(PortStart), "-",
+		            Genode::Hex(PortStart + cPorts - 1), " '", pszDesc, "'");
 
 	return guest_ioports()->add_range(pDevIns, PortStart, cPorts, pvUser,
 	                                  pfnOutCallback, pfnInCallback,
@@ -305,8 +293,9 @@ int IOMR3IOPortDeregister(PVM pVM, PPDMDEVINS pDevIns, RTIOPORT PortStart,
                           RTUINT cPorts)
 {
 	if (verbose)
-		PLOG("deregister I/O port range 0x%x-0x%x",
-		     PortStart, PortStart + cPorts - 1);
+		Genode::log("deregister I/O port range ",
+		            Genode::Hex(PortStart), "-",
+		            Genode::Hex(PortStart + cPorts - 1));
 
 	return guest_ioports()->remove_range(pDevIns, PortStart, cPorts);
 }

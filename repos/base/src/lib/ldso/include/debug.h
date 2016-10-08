@@ -14,7 +14,8 @@
 #ifndef _INCLUDE__DEBUG_H_
 #define _INCLUDE__DEBUG_H_
 
-#include <base/printf.h>
+#include <util/string.h>
+#include <base/log.h>
 #include <elf.h>
 
 constexpr bool verbose_link_map = false;
@@ -22,7 +23,16 @@ constexpr bool verbose_link_map = false;
 namespace Linker {
 	struct Debug;
 	struct Link_map;
+
+	struct Object;
+	void dump_link_map(Object *o);
 }
+
+/*
+ * GDB can set a breakpoint at this function to find out when ldso has loaded
+ * the binary into memory.
+ */
+void binary_ready_hook_for_gdb();
 
 /**
  * LIBC debug support
@@ -43,8 +53,8 @@ struct Linker::Debug
 
 	Debug() : Brk(brk) { }
 
-	int             version = 1;        /* unused */
-	struct Link_map *map    = nullptr;; /* start of link map */
+	int             version = 1;       /* unused */
+	struct Link_map *map    = nullptr; /* start of link map */
 
 	/*
 	 * This is the address of a function internal to the run-time linker, that
@@ -86,7 +96,7 @@ struct Linker::Link_map
 
 	static void add(Link_map *map)
 	{
-		map->next = nullptr;;
+		map->next = nullptr;
 		if (!first) {
 			first           = map;
 			Debug::d()->map = map;
@@ -118,8 +128,9 @@ struct Linker::Link_map
 			return;
 
 		for (Link_map *m = first; m; m = m->next)
-			PINF("MAP: addr: " EFMT " dynamic: %p %s m: %p p: %p n: %p",
-			     m->addr, m->dynamic, m->path, m, m->prev, m->next);
+			Genode::log("MAP: addr: ", Genode::Hex(m->addr),
+			            " dynamic: ", m->dynamic, " ", Genode::Cstring(m->path),
+			            " m: ", m, " p: ", m->prev, " n: ", m->next);
 	}
 };
 

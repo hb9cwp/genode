@@ -12,7 +12,7 @@
  */
 
 /* Genode */
-#include <base/printf.h>
+#include <base/log.h>
 #include <base/thread.h>
 #include <base/env.h>
 #include <cpu_session/connection.h>
@@ -25,6 +25,8 @@
 /* libc */
 #include <pthread.h>
 #include <errno.h>
+#include <stdio.h>
+#include <string.h>
 
 /* vbox */
 #include <internal/thread.h>
@@ -51,7 +53,7 @@ static Genode::Cpu_connection * cpu_connection(RTTHREADTYPE type) {
 
 	char * data = new (env()->heap()) char[16];
 
-	snprintf(data, 16, "vbox %u", type);
+	Genode::snprintf(data, 16, "vbox %u", type);
 
 	con[type - 1] = new (env()->heap()) Cpu_connection(data, prio);
 
@@ -66,25 +68,34 @@ static int create_thread(pthread_t *thread, const pthread_attr_t *attr,
 
 	Assert(rtthread);
 
-	size_t stack_size = Genode::Native_config::context_virtual_size() -
-	                    sizeof(Genode::Native_utcb) - 2 * (1UL << 12);
+	size_t const utcb_size = 4096;
+
+	size_t stack_size = Genode::Thread::stack_virtual_size() -
+	                    utcb_size - 2 * (1UL << 12);
 
 	if (rtthread->cbStack < stack_size)
 		stack_size = rtthread->cbStack;
 	else
-		PWRN("requested stack for thread '%s' of %zu Bytes is too large, "
-		     "limit to %zu Bytes", rtthread->szName, rtthread->cbStack,
-		     stack_size);
+		Genode::warning("requested stack for "
+		                "thread '", Genode::Cstring(rtthread->szName), "' "
+		                "of ", rtthread->cbStack, " Bytes is too large, "
+		                "limit to ", stack_size, " Bytes");
 
 	/* sanity check - emt and vcpu thread have to have same prio class */
-	if (!Genode::strcmp(rtthread->szName, "EMT"))
+	if (strstr(rtthread->szName, "EMT") == rtthread->szName)
 		Assert(rtthread->enmType == RTTHREADTYPE_EMULATION);
 
 	if (rtthread->enmType == RTTHREADTYPE_EMULATION) {
+
+		unsigned int cpu_id = 0;
+		sscanf(rtthread->szName, "EMT-%u", &cpu_id);
+
 		Genode::Cpu_session * cpu_session = cpu_connection(RTTHREADTYPE_EMULATION);
-		Genode::Affinity::Location location;
+		Genode::Affinity::Space space = cpu_session->affinity_space();
+		Genode::Affinity::Location location(space.location_of_index(cpu_id));
+
 		if (create_emt_vcpu(thread, stack_size, attr, start_routine, arg,
-		                    cpu_session, location))
+		                    cpu_session, location, cpu_id))
 			return 0;
 		/*
 		 * The virtualization layer had no need to setup the EMT
@@ -95,7 +106,8 @@ static int create_thread(pthread_t *thread, const pthread_attr_t *attr,
 	pthread_t thread_obj = new (Genode::env()->heap())
 	                           pthread(attr ? *attr : 0, start_routine,
 	                           arg, stack_size, rtthread->szName,
-	                           cpu_connection(rtthread->enmType));
+	                           cpu_connection(rtthread->enmType),
+	                           Genode::Affinity::Location());
 
 	if (!thread_obj)
 		return EAGAIN;
@@ -110,6 +122,9 @@ static int create_thread(pthread_t *thread, const pthread_attr_t *attr,
 extern "C" int pthread_create(pthread_t *thread, const pthread_attr_t *attr,
                               void *(*start_routine) (void *), void *arg)
 {
+	/* cleanup threads which tried to self-destruct */
+	pthread_cleanup();
+
 	PRTTHREADINT rtthread = reinterpret_cast<PRTTHREADINT>(arg);
 
 	/* retry thread creation once after CPU session upgrade */
@@ -119,14 +134,14 @@ extern "C" int pthread_create(pthread_t *thread, const pthread_attr_t *attr,
 		try {
 			return create_thread(thread, attr, start_routine, arg);
 		} catch (Cpu_session::Out_of_metadata) {
-			PWRN("Upgrading memory for creation of thread '%s'",
-			     rtthread->szName);
+			log("Upgrading memory for creation of "
+			    "thread '", Cstring(rtthread->szName), "'");
 			env()->parent()->upgrade(cpu_connection(rtthread->enmType)->cap(),
 			                         "ram_quota=4096");
 		} catch (...) { break; }
 	}
 
-	PERR("Could not create vbox pthread - halt");
+	Genode::error("could not create vbox pthread - halt");
 	Genode::Lock lock(Genode::Lock::LOCKED);
 	lock.lock();
 	return EAGAIN;

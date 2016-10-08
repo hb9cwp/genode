@@ -53,7 +53,7 @@ class Launcher::Menu_view_slave
 				char const **_permitted_services() const
 				{
 					static char const *permitted_services[] = {
-						"ROM", "CAP", "LOG", "SIGNAL", "RM", "Timer", 0 };
+						"ROM", "LOG", "RM", "Timer", 0 };
 
 					return permitted_services;
 				};
@@ -131,7 +131,7 @@ class Launcher::Menu_view_slave
 		Genode::size_t   const _ep_stack_size = 4*1024*sizeof(Genode::addr_t);
 		Genode::Rpc_entrypoint _ep;
 		Policy                 _policy;
-		Genode::size_t   const _quota = 4*1024*1024;
+		Genode::size_t   const _quota = 6*1024*1024;
 		Genode::Slave          _slave;
 
 	public:
@@ -144,6 +144,7 @@ class Launcher::Menu_view_slave
 		 *             dataspace
 		 */
 		Menu_view_slave(Genode::Cap_session &cap, Genode::Ram_session &ram,
+		                Genode::Dataspace_capability   ldso_ds,
 		                Capability<Nitpicker::Session> nitpicker_session,
 		                Capability<Rom_session>        dialog_rom_session,
 		                Capability<Report::Session>    hover_report_session,
@@ -152,7 +153,7 @@ class Launcher::Menu_view_slave
 			_ep(&cap, _ep_stack_size, "nit_fader"),
 			_policy(_ep, ram, nitpicker_session, dialog_rom_session,
 			        hover_report_session, initial_position),
-			_slave(_ep, _policy, _quota)
+			_slave(_ep, _policy, _quota, env()->ram_session_cap(), ldso_ds)
 		{ }
 
 		void position(Position position) { _policy.position(position); }
